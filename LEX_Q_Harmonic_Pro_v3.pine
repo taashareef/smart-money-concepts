@@ -1,0 +1,713 @@
+//@version=5
+indicator("LEX-Q Harmonic Pro v3.0", shorttitle="LEX-Q HP v3", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    LEX-Q HARMONIC PATTERN INDICATOR v3.0                     ║
+// ║       Advanced Fibonacci Zone Detection - Improved Accuracy Method           ║
+// ║                        Pine Script v5 - No Repainting                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ============================================================================
+//                    طريقة الكشف المحسنة (Zone-Based Detection)
+// ============================================================================
+// بدلاً من حساب النسب بعد اكتمال النموذج، نحسب نطاقات السعر الصالحة مسبقاً
+// ونتحقق من وقوع نقطة D ضمن هذه النطاقات
+// ============================================================================
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              المدخلات (INPUTS)                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+grp_zz = "══════ ZigZag ══════"
+i_depth = input.int(10, "Depth", minval=3, maxval=50, group=grp_zz)
+
+grp_pat = "══════ Patterns ══════"
+i_gartley = input.bool(true, "Gartley", group=grp_pat, inline="p1")
+i_bat = input.bool(true, "Bat", group=grp_pat, inline="p1")
+i_butterfly = input.bool(true, "Butterfly", group=grp_pat, inline="p2")
+i_crab = input.bool(true, "Crab", group=grp_pat, inline="p2")
+i_shark = input.bool(true, "Shark", group=grp_pat, inline="p3")
+i_cypher = input.bool(true, "Cypher", group=grp_pat, inline="p3")
+i_abcd = input.bool(true, "AB=CD", group=grp_pat, inline="p4")
+i_deep_crab = input.bool(true, "Deep Crab", group=grp_pat, inline="p4")
+
+grp_dir = "══════ Direction ══════"
+i_show_bull = input.bool(true, "Bullish", group=grp_dir, inline="dir")
+i_show_bear = input.bool(true, "Bearish", group=grp_dir, inline="dir")
+
+grp_val = "══════ Validation ══════"
+i_show_valid = input.bool(true, "Show Valid Format Only", group=grp_val, tooltip="يتحقق من عدم كسر النموذج بعد C")
+i_confirm_bars = input.int(2, "Confirmation Bars", minval=0, maxval=10, group=grp_val, tooltip="شموع التأكيد بعد اكتمال D")
+
+grp_disp = "══════ Display ══════"
+i_show_ratios = input.bool(true, "Show Ratios", group=grp_disp)
+i_show_prz = input.bool(true, "Show PRZ Zone", group=grp_disp)
+i_show_targets = input.bool(true, "Show Targets", group=grp_disp)
+i_show_sl = input.bool(true, "Show Stop Loss", group=grp_disp)
+i_max_patterns = input.int(5, "Max Patterns", minval=1, maxval=20, group=grp_disp)
+
+grp_col = "══════ Colors ══════"
+i_pattern_color = input.color(color.new(#00BCD4, 0), "Pattern Lines", group=grp_col)
+i_prz_bull = input.color(color.new(#00BCD4, 70), "PRZ Bullish", group=grp_col)
+i_prz_bear = input.color(color.new(#FF5252, 70), "PRZ Bearish", group=grp_col)
+i_target_color = input.color(color.new(#4CAF50, 0), "Target Color", group=grp_col)
+i_sl_color = input.color(color.new(#FF5252, 0), "Stop Loss Color", group=grp_col)
+i_fill_transp = input.int(85, "Fill Transparency", minval=60, maxval=95, group=grp_col)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    دالة فيبوناتشي لحساب نطاق السعر                           ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// هذه الدالة تحسب نطاق السعر الصالح لنسبة فيبوناتشي معينة
+// بدلاً من حساب النسبة، نحسب أين يجب أن يكون السعر
+f_fiboZone(float point0, float point1, float minRatio, float maxRatio) =>
+    delta = point1 - point0
+    var float zoneMax = 0.0
+    var float zoneMin = 0.0
+
+    if delta > 0
+        zoneMax := point0 + (delta * maxRatio)
+        zoneMin := point0 + (delta * minRatio)
+    else if delta < 0
+        zoneMin := point0 - (math.abs(delta) * maxRatio)
+        zoneMax := point0 - (math.abs(delta) * minRatio)
+
+    [zoneMin, zoneMax]
+
+// التحقق من وقوع سعر ضمن نطاق
+f_inZone(float price, float zoneMin, float zoneMax) =>
+    price >= zoneMin and price <= zoneMax
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    نسب الأنماط (Pattern Ratios)                              ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// Gartley
+GARTLEY_XAB_MIN = 0.618 - 0.02
+GARTLEY_XAB_MAX = 0.618 + 0.02
+GARTLEY_ABC_MIN = 0.382
+GARTLEY_ABC_MAX = 0.886
+GARTLEY_BCD_MIN = 1.272
+GARTLEY_BCD_MAX = 1.618
+GARTLEY_XAD_MIN = 0.786 - 0.02
+GARTLEY_XAD_MAX = 0.786 + 0.02
+
+// Bat
+BAT_XAB_MIN = 0.382
+BAT_XAB_MAX = 0.50
+BAT_ABC_MIN = 0.382
+BAT_ABC_MAX = 0.886
+BAT_BCD_MIN = 1.618
+BAT_BCD_MAX = 2.618
+BAT_XAD_MIN = 0.886 - 0.02
+BAT_XAD_MAX = 0.886 + 0.02
+
+// Butterfly
+BUTTERFLY_XAB_MIN = 0.786 - 0.02
+BUTTERFLY_XAB_MAX = 0.786 + 0.02
+BUTTERFLY_ABC_MIN = 0.382
+BUTTERFLY_ABC_MAX = 0.886
+BUTTERFLY_BCD_MIN = 1.618
+BUTTERFLY_BCD_MAX = 2.618
+BUTTERFLY_XAD_MIN = 1.27
+BUTTERFLY_XAD_MAX = 1.618
+
+// Crab
+CRAB_XAB_MIN = 0.382
+CRAB_XAB_MAX = 0.618
+CRAB_ABC_MIN = 0.382
+CRAB_ABC_MAX = 0.886
+CRAB_BCD_MIN = 2.618
+CRAB_BCD_MAX = 3.618
+CRAB_XAD_MIN = 1.618 - 0.05
+CRAB_XAD_MAX = 1.618 + 0.05
+
+// Deep Crab
+DEEP_CRAB_XAB_MIN = 0.886 - 0.02
+DEEP_CRAB_XAB_MAX = 0.886 + 0.02
+DEEP_CRAB_ABC_MIN = 0.382
+DEEP_CRAB_ABC_MAX = 0.886
+DEEP_CRAB_BCD_MIN = 2.0
+DEEP_CRAB_BCD_MAX = 3.618
+DEEP_CRAB_XAD_MIN = 1.618 - 0.05
+DEEP_CRAB_XAD_MAX = 1.618 + 0.05
+
+// Shark
+SHARK_XAB_MIN = 0.382
+SHARK_XAB_MAX = 0.618
+SHARK_ABC_MIN = 1.13
+SHARK_ABC_MAX = 1.618
+SHARK_BCD_MIN = 1.618
+SHARK_BCD_MAX = 2.24
+SHARK_XAD_MIN = 0.886
+SHARK_XAD_MAX = 1.13
+
+// Cypher
+CYPHER_XAB_MIN = 0.382
+CYPHER_XAB_MAX = 0.618
+CYPHER_ABC_MIN = 1.272
+CYPHER_ABC_MAX = 1.414
+CYPHER_XCD_MIN = 0.786 - 0.02
+CYPHER_XCD_MAX = 0.786 + 0.02
+
+// ABCD
+ABCD_ABC_MIN = 0.382
+ABCD_ABC_MAX = 0.886
+ABCD_BCD_MIN = 1.0
+ABCD_BCD_MAX = 1.618
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          خوارزمية ZigZag المحسنة                             ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var float[] zzPrice = array.new_float(6, na)
+var int[] zzBar = array.new_int(6, na)
+var bool[] zzDir = array.new_bool(6, true)  // true = high, false = low
+
+pivotHi = ta.pivothigh(high, i_depth, i_depth)
+pivotLo = ta.pivotlow(low, i_depth, i_depth)
+pivotIdx = bar_index - i_depth
+
+f_addPivot(float _p, int _b, bool _h) =>
+    for i = 5 to 1
+        array.set(zzPrice, i, array.get(zzPrice, i-1))
+        array.set(zzBar, i, array.get(zzBar, i-1))
+        array.set(zzDir, i, array.get(zzDir, i-1))
+    array.set(zzPrice, 0, _p)
+    array.set(zzBar, 0, _b)
+    array.set(zzDir, 0, _h)
+
+// معالجة متقدمة عند ظهور قمة وقاع معاً
+if not na(pivotHi) and not na(pivotLo)
+    lastDir = array.get(zzDir, 0)
+    lastP = array.get(zzPrice, 0)
+    highVal = ta.valuewhen(pivotHi, high[i_depth], 0)
+    lowVal = ta.valuewhen(pivotLo, low[i_depth], 0)
+
+    if na(lastP)
+        f_addPivot(highVal, pivotIdx, true)
+    else if not lastDir  // آخر نقطة كانت قاع
+        if lowVal < lastP
+            array.set(zzPrice, 0, lowVal)
+            array.set(zzBar, 0, pivotIdx)
+            f_addPivot(highVal, pivotIdx, true)
+        else
+            f_addPivot(highVal, pivotIdx, true)
+    else if lastDir  // آخر نقطة كانت قمة
+        if highVal > lastP
+            array.set(zzPrice, 0, highVal)
+            array.set(zzBar, 0, pivotIdx)
+            f_addPivot(lowVal, pivotIdx, false)
+        else
+            f_addPivot(lowVal, pivotIdx, false)
+
+else if not na(pivotHi)
+    lastDir = array.get(zzDir, 0)
+    lastP = array.get(zzPrice, 0)
+    highVal = ta.valuewhen(pivotHi, high[i_depth], 0)
+
+    if na(lastP)
+        f_addPivot(highVal, pivotIdx, true)
+    else if not lastDir
+        f_addPivot(highVal, pivotIdx, true)
+    else if lastDir and highVal > lastP
+        array.set(zzPrice, 0, highVal)
+        array.set(zzBar, 0, pivotIdx)
+
+else if not na(pivotLo)
+    lastDir = array.get(zzDir, 0)
+    lastP = array.get(zzPrice, 0)
+    lowVal = ta.valuewhen(pivotLo, low[i_depth], 0)
+
+    if na(lastP)
+        f_addPivot(lowVal, pivotIdx, false)
+    else if lastDir
+        f_addPivot(lowVal, pivotIdx, false)
+    else if not lastDir and lowVal < lastP
+        array.set(zzPrice, 0, lowVal)
+        array.set(zzBar, 0, pivotIdx)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          استخراج نقاط XABCD                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+float pD = na, int bD = na
+float pC = array.get(zzPrice, 0), int bC = array.get(zzBar, 0)
+float pB = array.get(zzPrice, 1), int bB = array.get(zzBar, 1)
+float pA = array.get(zzPrice, 2), int bA = array.get(zzBar, 2)
+float pX = array.get(zzPrice, 3), int bX = array.get(zzBar, 3)
+
+validPivots = not na(pX) and not na(pA) and not na(pB) and not na(pC) and not na(bX) and not na(bA) and not na(bB) and not na(bC)
+
+// حساب النسب الفعلية للعرض
+XA = math.abs(pA - pX)
+AB = math.abs(pB - pA)
+BC = math.abs(pC - pB)
+XC = math.abs(pC - pX)
+
+XAB_ratio = XA > 0 ? AB / XA : na
+ABC_ratio = AB > 0 ? BC / AB : na
+
+isBullish = validPivots and pX < pA  // X أدنى = صعودي
+isBearish = validPivots and pX > pA  // X أعلى = هبوطي
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    دوال كشف الأنماط بطريقة Zone Detection                    ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// متغيرات للتتبع
+var bool permit = true
+var int lastPatternX = 0
+var string detectedPattern = ""
+var bool patternFound = false
+var float dPrice = na
+var int dBar = na
+
+// مصفوفات الرسم
+var line[] gLines = array.new_line()
+var label[] gLabels = array.new_label()
+var linefill[] gFills = array.new_linefill()
+var box[] gBoxes = array.new_box()
+
+f_cleanDrawings() =>
+    while array.size(gLines) > i_max_patterns * 20
+        line.delete(array.shift(gLines))
+    while array.size(gLabels) > i_max_patterns * 15
+        label.delete(array.shift(gLabels))
+    while array.size(gFills) > i_max_patterns * 4
+        linefill.delete(array.shift(gFills))
+    while array.size(gBoxes) > i_max_patterns * 2
+        box.delete(array.shift(gBoxes))
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                         دالة كشف نمط XABCD عام                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+f_detectPattern(string patternType, bool isBull,
+     float xabMin, float xabMax, float abcMin, float abcMax,
+     float bcdMin, float bcdMax, float xadMin, float xadMax) =>
+
+    result_found = false
+    result_dPrice = float(na)
+    result_dBar = int(na)
+
+    if validPivots
+        // حساب نطاقات فيبوناتشي
+        [b_zoneMin, b_zoneMax] = f_fiboZone(pA, pX, xabMin, xabMax)
+        [c_zoneMin, c_zoneMax] = f_fiboZone(pB, pA, abcMin, abcMax)
+        [d_bcd_zoneMin, d_bcd_zoneMax] = f_fiboZone(pC, pB, bcdMin, bcdMax)
+        [d_xad_zoneMin, d_xad_zoneMax] = f_fiboZone(pA, pX, xadMin, xadMax)
+
+        // التحقق من B و C
+        b_valid = f_inZone(pB, b_zoneMin, b_zoneMax)
+        c_valid = f_inZone(pC, c_zoneMin, c_zoneMax)
+
+        if b_valid and c_valid
+            if isBull and i_show_bull
+                // للنمط الصعودي: D يجب أن يكون قاع (low)
+                // التحقق من أن low الحالي ضمن نطاقي BCD و XAD
+                d_bcd_valid = f_inZone(low, d_bcd_zoneMin, d_bcd_zoneMax)
+                d_xad_valid = f_inZone(low, d_xad_zoneMin, d_xad_zoneMax)
+
+                // التحقق من صحة الشكل (Show Valid Format)
+                validFormat = true
+                if i_show_valid and bar_index > bC
+                    lowestSinceC = ta.lowest(low, bar_index - bC + 1)
+                    if lowestSinceC < math.min(d_xad_zoneMin, d_bcd_zoneMin)
+                        validFormat := false
+
+                if d_bcd_valid and d_xad_valid and validFormat and pX < pB
+                    result_found := true
+                    result_dPrice := low
+                    result_dBar := bar_index
+
+            else if not isBull and i_show_bear
+                // للنمط الهبوطي: D يجب أن يكون قمة (high)
+                d_bcd_valid = f_inZone(high, d_bcd_zoneMin, d_bcd_zoneMax)
+                d_xad_valid = f_inZone(high, d_xad_zoneMin, d_xad_zoneMax)
+
+                validFormat = true
+                if i_show_valid and bar_index > bC
+                    highestSinceC = ta.highest(high, bar_index - bC + 1)
+                    if highestSinceC > math.max(d_xad_zoneMax, d_bcd_zoneMax)
+                        validFormat := false
+
+                if d_bcd_valid and d_xad_valid and validFormat and pX > pB
+                    result_found := true
+                    result_dPrice := high
+                    result_dBar := bar_index
+
+    [result_found, result_dPrice, result_dBar]
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                         دالة كشف نمط Cypher خاص                              ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+f_detectCypher(bool isBull) =>
+    result_found = false
+    result_dPrice = float(na)
+    result_dBar = int(na)
+
+    if validPivots
+        [b_zoneMin, b_zoneMax] = f_fiboZone(pA, pX, CYPHER_XAB_MIN, CYPHER_XAB_MAX)
+
+        // للـ Cypher: C هو امتداد من XA
+        xc_ratio = XA > 0 ? XC / XA : 0.0
+        c_valid = xc_ratio >= CYPHER_ABC_MIN and xc_ratio <= CYPHER_ABC_MAX
+        b_valid = f_inZone(pB, b_zoneMin, b_zoneMax)
+
+        // D هو تصحيح من XC
+        [d_zoneMin, d_zoneMax] = f_fiboZone(pC, pX, CYPHER_XCD_MIN, CYPHER_XCD_MAX)
+
+        if b_valid and c_valid
+            if isBull and i_show_bull
+                d_valid = f_inZone(low, d_zoneMin, d_zoneMax)
+                if d_valid and pX < pB
+                    result_found := true
+                    result_dPrice := low
+                    result_dBar := bar_index
+            else if not isBull and i_show_bear
+                d_valid = f_inZone(high, d_zoneMin, d_zoneMax)
+                if d_valid and pX > pB
+                    result_found := true
+                    result_dPrice := high
+                    result_dBar := bar_index
+
+    [result_found, result_dPrice, result_dBar]
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                         دالة كشف نمط ABCD خاص                                ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+f_detectABCD(bool isBull) =>
+    result_found = false
+    result_dPrice = float(na)
+    result_dBar = int(na)
+
+    if validPivots
+        [c_zoneMin, c_zoneMax] = f_fiboZone(pB, pA, ABCD_ABC_MIN, ABCD_ABC_MAX)
+        [d_zoneMin, d_zoneMax] = f_fiboZone(pC, pB, ABCD_BCD_MIN, ABCD_BCD_MAX)
+
+        c_valid = f_inZone(pC, c_zoneMin, c_zoneMax)
+
+        if c_valid
+            if isBull and i_show_bull and pA > pB
+                d_valid = f_inZone(low, d_zoneMin, d_zoneMax)
+                // التحقق من تماثل AB = CD
+                ab_len = math.abs(pB - pA)
+                cd_len = math.abs(low - pC)
+                symmetric = cd_len >= ab_len * 0.9 and cd_len <= ab_len * 1.1
+                if d_valid and symmetric
+                    result_found := true
+                    result_dPrice := low
+                    result_dBar := bar_index
+            else if not isBull and i_show_bear and pA < pB
+                d_valid = f_inZone(high, d_zoneMin, d_zoneMax)
+                ab_len = math.abs(pB - pA)
+                cd_len = math.abs(high - pC)
+                symmetric = cd_len >= ab_len * 0.9 and cd_len <= ab_len * 1.1
+                if d_valid and symmetric
+                    result_found := true
+                    result_dPrice := high
+                    result_dBar := bar_index
+
+    [result_found, result_dPrice, result_dBar]
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          دالة الرسم الاحترافية                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+f_drawPattern(string _name, float _dPrice, int _dBar, bool _isBull) =>
+    col = i_pattern_color
+    fCol = color.new(col, i_fill_transp)
+    przCol = _isBull ? i_prz_bull : i_prz_bear
+
+    CD = math.abs(_dPrice - pC)
+    futureExtend = _dBar > bX ? math.round((_dBar - bX) * 0.5) : 30
+    futureExtend := math.max(futureExtend, 20)
+
+    // الخطوط الرئيسية
+    lineXA = line.new(bX, pX, bA, pA, width=2, color=col)
+    lineAB = line.new(bA, pA, bB, pB, width=2, color=col)
+    lineBC = line.new(bB, pB, bC, pC, width=2, color=col)
+    lineCD = line.new(bC, pC, _dBar, _dPrice, width=2, color=col)
+    array.push(gLines, lineXA)
+    array.push(gLines, lineAB)
+    array.push(gLines, lineBC)
+    array.push(gLines, lineCD)
+
+    // الخطوط المتقطعة
+    lineXB = line.new(bX, pX, bB, pB, width=1, color=color.new(col, 35), style=line.style_dashed)
+    lineAC = line.new(bA, pA, bC, pC, width=1, color=color.new(col, 35), style=line.style_dashed)
+    lineXD = line.new(bX, pX, _dBar, _dPrice, width=1, color=color.new(col, 35), style=line.style_dotted)
+    lineBD = line.new(bB, pB, _dBar, _dPrice, width=1, color=color.new(col, 35), style=line.style_dashed)
+    array.push(gLines, lineXB)
+    array.push(gLines, lineAC)
+    array.push(gLines, lineXD)
+    array.push(gLines, lineBD)
+
+    // تعبئة
+    array.push(gFills, linefill.new(lineXA, lineAB, fCol))
+    array.push(gFills, linefill.new(lineBC, lineCD, fCol))
+
+    // النسب
+    if i_show_ratios
+        XAD_ratio = XA > 0 ? math.abs(_dPrice - pA) / XA : 0.0
+        BCD_ratio = BC > 0 ? CD / BC : 0.0
+
+        array.push(gLabels, label.new(math.round((bX + bB) / 2), (pX + pB) / 2, str.tostring(XAB_ratio, "#.###"),
+             color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+        array.push(gLabels, label.new(math.round((bA + bC) / 2), (pA + pC) / 2, str.tostring(ABC_ratio, "#.###"),
+             color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+        array.push(gLabels, label.new(math.round((bB + _dBar) / 2), (pB + _dPrice) / 2, str.tostring(BCD_ratio, "#.###"),
+             color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+        array.push(gLabels, label.new(math.round((bX + _dBar) / 2), (pX + _dPrice) / 2, str.tostring(XAD_ratio, "#.###"),
+             color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+
+    // التسميات
+    offset = XA * 0.03
+    array.push(gLabels, label.new(bX, _isBull ? pX - offset : pX + offset, "X", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.normal))
+    array.push(gLabels, label.new(bA, _isBull ? pA + offset : pA - offset, "A", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.normal))
+    array.push(gLabels, label.new(bB, _isBull ? pB - offset : pB + offset, "B", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.normal))
+    array.push(gLabels, label.new(bC, _isBull ? pC + offset : pC - offset, "C", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.normal))
+    array.push(gLabels, label.new(_dBar, _isBull ? _dPrice - offset : _dPrice + offset, "D", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.normal))
+
+    // اسم النموذج
+    dirText = _isBull ? "▲ BULLISH" : "▼ BEARISH"
+    nameColor = _isBull ? color.new(#00BCD4, 20) : color.new(#FF5252, 20)
+    array.push(gLabels, label.new(math.round((bA + bC) / 2), _isBull ? math.max(pA, pC) + XA * 0.08 : math.min(pA, pC) - XA * 0.08,
+         _name + "\n" + dirText, color=nameColor, textcolor=color.white, style=label.style_label_center, size=size.normal))
+
+    // PRZ
+    if i_show_prz
+        przH = CD * 0.15
+        przTop = _isBull ? _dPrice + przH : _dPrice
+        przBot = _isBull ? _dPrice : _dPrice - przH
+        array.push(gBoxes, box.new(_dBar, przTop, _dBar + futureExtend, przBot, border_color=col, bgcolor=przCol, border_width=1))
+        array.push(gLabels, label.new(_dBar + futureExtend, _dPrice, "PRZ\n" + str.tostring(_dPrice, format.mintick),
+             color=color.new(color.black, 100), textcolor=col, style=label.style_label_left, size=size.small))
+
+    // SL
+    if i_show_sl
+        slLvl = _isBull ? _dPrice - CD * 0.2 : _dPrice + CD * 0.2
+        array.push(gLines, line.new(_dBar, slLvl, _dBar + futureExtend, slLvl, color=i_sl_color, width=2))
+        array.push(gLabels, label.new(_dBar + futureExtend, slLvl, "SL: " + str.tostring(slLvl, format.mintick),
+             color=color.new(color.black, 100), textcolor=i_sl_color, style=label.style_label_left, size=size.tiny))
+
+    // Targets
+    if i_show_targets
+        tp1 = _isBull ? _dPrice + CD * 0.382 : _dPrice - CD * 0.382
+        tp2 = _isBull ? _dPrice + CD * 0.618 : _dPrice - CD * 0.618
+        tp3 = _isBull ? _dPrice + CD * 1.0 : _dPrice - CD * 1.0
+
+        array.push(gLines, line.new(_dBar, tp1, _dBar + futureExtend, tp1, color=i_target_color, width=1, style=line.style_dotted))
+        array.push(gLines, line.new(_dBar, tp2, _dBar + futureExtend, tp2, color=i_target_color, width=1, style=line.style_dotted))
+        array.push(gLines, line.new(_dBar, tp3, _dBar + futureExtend, tp3, color=i_target_color, width=1, style=line.style_dotted))
+
+        array.push(gLabels, label.new(_dBar + futureExtend, tp1, "TP1: " + str.tostring(tp1, format.mintick), color=color.new(color.black, 100), textcolor=i_target_color, style=label.style_label_left, size=size.tiny))
+        array.push(gLabels, label.new(_dBar + futureExtend, tp2, "TP2: " + str.tostring(tp2, format.mintick), color=color.new(color.black, 100), textcolor=i_target_color, style=label.style_label_left, size=size.tiny))
+        array.push(gLabels, label.new(_dBar + futureExtend, tp3, "TP3: " + str.tostring(tp3, format.mintick), color=color.new(color.black, 100), textcolor=i_target_color, style=label.style_label_left, size=size.tiny))
+
+    f_cleanDrawings()
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                            محرك الكشف الرئيسي                                ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// إعادة تعيين permit عند تغير X
+if bX != lastPatternX
+    permit := true
+    lastPatternX := bX
+
+// تأكيد بعد شموع معينة
+n = i_confirm_bars
+highest_n = bar_index > n ? ta.highest(high, n + 1) : high
+lowest_n = bar_index > n ? ta.lowest(low, n + 1) : low
+
+patternFound := false
+detectedPattern := ""
+
+if validPivots and permit
+    // البحث عن الأنماط
+
+    // Gartley
+    if i_gartley
+        [found_bull, dp_bull, db_bull] = f_detectPattern("Gartley", isBullish, GARTLEY_XAB_MIN, GARTLEY_XAB_MAX, GARTLEY_ABC_MIN, GARTLEY_ABC_MAX, GARTLEY_BCD_MIN, GARTLEY_BCD_MAX, GARTLEY_XAD_MIN, GARTLEY_XAD_MAX)
+        [found_bear, dp_bear, db_bear] = f_detectPattern("Gartley", isBearish, GARTLEY_XAB_MIN, GARTLEY_XAB_MAX, GARTLEY_ABC_MIN, GARTLEY_ABC_MAX, GARTLEY_BCD_MIN, GARTLEY_BCD_MAX, GARTLEY_XAD_MIN, GARTLEY_XAD_MAX)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "GARTLEY"
+            dPrice := dp_bull
+            dBar := db_bull
+            f_drawPattern("GARTLEY", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "GARTLEY"
+            dPrice := dp_bear
+            dBar := db_bear
+            f_drawPattern("GARTLEY", dp_bear, db_bear, false)
+            permit := false
+
+    // Bat
+    if i_bat and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectPattern("Bat", isBullish, BAT_XAB_MIN, BAT_XAB_MAX, BAT_ABC_MIN, BAT_ABC_MAX, BAT_BCD_MIN, BAT_BCD_MAX, BAT_XAD_MIN, BAT_XAD_MAX)
+        [found_bear, dp_bear, db_bear] = f_detectPattern("Bat", isBearish, BAT_XAB_MIN, BAT_XAB_MAX, BAT_ABC_MIN, BAT_ABC_MAX, BAT_BCD_MIN, BAT_BCD_MAX, BAT_XAD_MIN, BAT_XAD_MAX)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "BAT"
+            f_drawPattern("BAT", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "BAT"
+            f_drawPattern("BAT", dp_bear, db_bear, false)
+            permit := false
+
+    // Butterfly
+    if i_butterfly and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectPattern("Butterfly", isBullish, BUTTERFLY_XAB_MIN, BUTTERFLY_XAB_MAX, BUTTERFLY_ABC_MIN, BUTTERFLY_ABC_MAX, BUTTERFLY_BCD_MIN, BUTTERFLY_BCD_MAX, BUTTERFLY_XAD_MIN, BUTTERFLY_XAD_MAX)
+        [found_bear, dp_bear, db_bear] = f_detectPattern("Butterfly", isBearish, BUTTERFLY_XAB_MIN, BUTTERFLY_XAB_MAX, BUTTERFLY_ABC_MIN, BUTTERFLY_ABC_MAX, BUTTERFLY_BCD_MIN, BUTTERFLY_BCD_MAX, BUTTERFLY_XAD_MIN, BUTTERFLY_XAD_MAX)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "BUTTERFLY"
+            f_drawPattern("BUTTERFLY", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "BUTTERFLY"
+            f_drawPattern("BUTTERFLY", dp_bear, db_bear, false)
+            permit := false
+
+    // Crab
+    if i_crab and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectPattern("Crab", isBullish, CRAB_XAB_MIN, CRAB_XAB_MAX, CRAB_ABC_MIN, CRAB_ABC_MAX, CRAB_BCD_MIN, CRAB_BCD_MAX, CRAB_XAD_MIN, CRAB_XAD_MAX)
+        [found_bear, dp_bear, db_bear] = f_detectPattern("Crab", isBearish, CRAB_XAB_MIN, CRAB_XAB_MAX, CRAB_ABC_MIN, CRAB_ABC_MAX, CRAB_BCD_MIN, CRAB_BCD_MAX, CRAB_XAD_MIN, CRAB_XAD_MAX)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "CRAB"
+            f_drawPattern("CRAB", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "CRAB"
+            f_drawPattern("CRAB", dp_bear, db_bear, false)
+            permit := false
+
+    // Deep Crab
+    if i_deep_crab and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectPattern("Deep Crab", isBullish, DEEP_CRAB_XAB_MIN, DEEP_CRAB_XAB_MAX, DEEP_CRAB_ABC_MIN, DEEP_CRAB_ABC_MAX, DEEP_CRAB_BCD_MIN, DEEP_CRAB_BCD_MAX, DEEP_CRAB_XAD_MIN, DEEP_CRAB_XAD_MAX)
+        [found_bear, dp_bear, db_bear] = f_detectPattern("Deep Crab", isBearish, DEEP_CRAB_XAB_MIN, DEEP_CRAB_XAB_MAX, DEEP_CRAB_ABC_MIN, DEEP_CRAB_ABC_MAX, DEEP_CRAB_BCD_MIN, DEEP_CRAB_BCD_MAX, DEEP_CRAB_XAD_MIN, DEEP_CRAB_XAD_MAX)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "DEEP CRAB"
+            f_drawPattern("DEEP CRAB", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "DEEP CRAB"
+            f_drawPattern("DEEP CRAB", dp_bear, db_bear, false)
+            permit := false
+
+    // Shark
+    if i_shark and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectPattern("Shark", isBullish, SHARK_XAB_MIN, SHARK_XAB_MAX, SHARK_ABC_MIN, SHARK_ABC_MAX, SHARK_BCD_MIN, SHARK_BCD_MAX, SHARK_XAD_MIN, SHARK_XAD_MAX)
+        [found_bear, dp_bear, db_bear] = f_detectPattern("Shark", isBearish, SHARK_XAB_MIN, SHARK_XAB_MAX, SHARK_ABC_MIN, SHARK_ABC_MAX, SHARK_BCD_MIN, SHARK_BCD_MAX, SHARK_XAD_MIN, SHARK_XAD_MAX)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "SHARK"
+            f_drawPattern("SHARK", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "SHARK"
+            f_drawPattern("SHARK", dp_bear, db_bear, false)
+            permit := false
+
+    // Cypher
+    if i_cypher and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectCypher(true)
+        [found_bear, dp_bear, db_bear] = f_detectCypher(false)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "CYPHER"
+            f_drawPattern("CYPHER", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "CYPHER"
+            f_drawPattern("CYPHER", dp_bear, db_bear, false)
+            permit := false
+
+    // ABCD
+    if i_abcd and not patternFound
+        [found_bull, dp_bull, db_bull] = f_detectABCD(true)
+        [found_bear, dp_bear, db_bear] = f_detectABCD(false)
+
+        if found_bull and lowest_n == dp_bull
+            patternFound := true
+            detectedPattern := "AB=CD"
+            f_drawPattern("AB=CD", dp_bull, db_bull, true)
+            permit := false
+        else if found_bear and highest_n == dp_bear
+            patternFound := true
+            detectedPattern := "AB=CD"
+            f_drawPattern("AB=CD", dp_bear, db_bear, false)
+            permit := false
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              لوحة المعلومات                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var table infoPanel = table.new(position.top_right, 2, 8, bgcolor=color.new(#1a1a2e, 90), border_width=1, border_color=color.new(#00BCD4, 50))
+
+if barstate.islast
+    table.cell(infoPanel, 0, 0, "LEX-Q v3", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 40))
+    table.cell(infoPanel, 1, 0, "ZONE DETECT", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 40))
+
+    table.cell(infoPanel, 0, 1, "Pattern:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 1, detectedPattern != "" ? detectedPattern : "Scanning...", text_color=color.lime, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 2, "Direction:", text_color=color.gray, text_size=size.tiny)
+    dirTxt = isBullish ? "BULLISH" : isBearish ? "BEARISH" : "N/A"
+    dirClr = isBullish ? color.green : isBearish ? color.red : color.gray
+    table.cell(infoPanel, 1, 2, dirTxt, text_color=dirClr, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 3, "XAB:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 3, str.tostring(nz(XAB_ratio, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 4, "ABC:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 4, str.tostring(nz(ABC_ratio, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 5, "Depth:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 5, str.tostring(i_depth), text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 6, "Valid Only:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 6, i_show_valid ? "ON" : "OFF", text_color=i_show_valid ? color.green : color.orange, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 7, "Status:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 7, permit ? "READY" : "LOCKED", text_color=permit ? color.green : color.orange, text_size=size.tiny)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                             المخرجات البصرية                                 ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+plotshape(patternFound and isBullish, "Bullish Signal", shape.labelup, location.belowbar, color.new(#00BCD4, 0), size=size.normal, text="BUY", textcolor=color.white)
+plotshape(patternFound and isBearish, "Bearish Signal", shape.labeldown, location.abovebar, color.new(#FF5252, 0), size=size.normal, text="SELL", textcolor=color.white)
+
+bgcolor(patternFound ? color.new(#00BCD4, 95) : na, title="Pattern Alert")
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                               التنبيهات                                      ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+alertcondition(patternFound and isBullish, "Bullish Harmonic", "🎯 Bullish " + detectedPattern + " on {{ticker}}")
+alertcondition(patternFound and isBearish, "Bearish Harmonic", "🎯 Bearish " + detectedPattern + " on {{ticker}}")
+alertcondition(patternFound, "Any Harmonic", "🎯 {{ticker}}: " + detectedPattern + " Pattern!")
