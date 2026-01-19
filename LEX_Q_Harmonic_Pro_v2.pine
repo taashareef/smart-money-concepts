@@ -1,0 +1,546 @@
+//@version=5
+indicator("LEX-Q Harmonic Pro v2.0", shorttitle="LEX-Q HP v2", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    LEX-Q HARMONIC PATTERN INDICATOR v2.0                     ║
+// ║              Professional Edition - Correct Ratios & Logic                    ║
+// ║                        Pine Script v5 - No Repainting                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ============================================================================
+//                          نسب هارمونيك الصحيحة
+// ============================================================================
+// Gartley:    XAB = 0.618,       ABC = 0.382-0.886, XAD = 0.786
+// Bat:        XAB = 0.382-0.5,   ABC = 0.382-0.886, XAD = 0.886
+// Butterfly:  XAB = 0.786,       ABC = 0.382-0.886, XAD = 1.27/1.618
+// Crab:       XAB = 0.382-0.618, ABC = 0.382-0.886, XAD = 1.618
+// Shark:      XAB = 0.382-0.618, ABC = 1.13-1.618,  XAD = 0.886-1.13
+// Cypher:     XAB = 0.382-0.618, XCD = 0.786
+// ABCD:       ABC = 0.382-0.886, CD/AB = 1.0/1.272/1.618
+// ============================================================================
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              المدخلات (INPUTS)                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// --- ZigZag Settings ---
+grp_zz = "══════ ZigZag ══════"
+i_depth = input.int(10, "Depth", minval=3, maxval=50, group=grp_zz, tooltip="عمق البحث عن القمم والقيعان")
+i_confirm = input.int(2, "Confirmation Bars", minval=1, maxval=10, group=grp_zz, tooltip="شموع التأكيد لمنع إعادة الرسم")
+
+// --- Pattern Selection ---
+grp_pat = "══════ Patterns ══════"
+i_gartley = input.bool(true, "Gartley", group=grp_pat, inline="p1")
+i_bat = input.bool(true, "Bat", group=grp_pat, inline="p1")
+i_butterfly = input.bool(true, "Butterfly", group=grp_pat, inline="p2")
+i_crab = input.bool(true, "Crab", group=grp_pat, inline="p2")
+i_shark = input.bool(true, "Shark", group=grp_pat, inline="p3")
+i_cypher = input.bool(true, "Cypher", group=grp_pat, inline="p3")
+i_abcd = input.bool(true, "AB=CD", group=grp_pat, inline="p4")
+
+// --- Direction Filter ---
+grp_dir = "══════ Direction ══════"
+i_show_bull = input.bool(true, "Bullish Patterns", group=grp_dir, inline="dir")
+i_show_bear = input.bool(true, "Bearish Patterns", group=grp_dir, inline="dir")
+
+// --- Tolerance ---
+grp_tol = "══════ Tolerance ══════"
+i_tolerance = input.float(0.08, "Ratio Tolerance", minval=0.01, maxval=0.25, step=0.01, group=grp_tol, tooltip="نسبة التسامح في حسابات فيبوناتشي")
+
+// --- Display Settings ---
+grp_disp = "══════ Display ══════"
+i_show_ratios = input.bool(true, "Show Ratios", group=grp_disp)
+i_show_prz = input.bool(true, "Show PRZ Zone", group=grp_disp)
+i_show_targets = input.bool(true, "Show Targets (TP)", group=grp_disp)
+i_show_sl = input.bool(true, "Show Stop Loss", group=grp_disp)
+i_show_labels = input.bool(true, "Show Point Labels", group=grp_disp)
+i_max_patterns = input.int(5, "Max Patterns", minval=1, maxval=20, group=grp_disp)
+
+// --- Colors ---
+grp_col = "══════ Colors ══════"
+i_pattern_color = input.color(color.new(#00BCD4, 0), "Pattern Lines", group=grp_col)
+i_prz_bull = input.color(color.new(#00BCD4, 70), "PRZ Bullish", group=grp_col)
+i_prz_bear = input.color(color.new(#FF5252, 70), "PRZ Bearish", group=grp_col)
+i_target_color = input.color(color.new(#4CAF50, 0), "Target Color", group=grp_col)
+i_sl_color = input.color(color.new(#FF5252, 0), "Stop Loss Color", group=grp_col)
+i_fill_transp = input.int(85, "Fill Transparency", minval=60, maxval=95, group=grp_col)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                           الدوال المساعدة                                    ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// التحقق من نسبة محددة ضمن التسامح
+f_isRatio(float _val, float _target, float _tol) =>
+    not na(_val) and math.abs(_val - _target) <= _tol
+
+// التحقق من نسبة ضمن نطاق
+f_inRange(float _val, float _min, float _max, float _tol) =>
+    not na(_val) and _val >= (_min - _tol) and _val <= (_max + _tol)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          خوارزمية ZigZag المحسنة                             ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// مصفوفات لتخزين 6 نقاط (لدعم XABCD + نقطة احتياطية)
+var float[] zzPrice = array.new_float(6, na)
+var int[] zzBar = array.new_int(6, na)
+var bool[] zzDir = array.new_bool(6, true)  // true = high, false = low
+
+// حساب القمم والقيعان مع التأكيد
+pivotHi = ta.pivothigh(high, i_depth, i_confirm)
+pivotLo = ta.pivotlow(low, i_depth, i_confirm)
+pivotIdx = bar_index - i_confirm
+
+// دالة إضافة نقطة جديدة
+f_addPivot(float _p, int _b, bool _h) =>
+    // تحريك جميع العناصر للأمام
+    for i = 5 to 1
+        array.set(zzPrice, i, array.get(zzPrice, i-1))
+        array.set(zzBar, i, array.get(zzBar, i-1))
+        array.set(zzDir, i, array.get(zzDir, i-1))
+    // إضافة النقطة الجديدة
+    array.set(zzPrice, 0, _p)
+    array.set(zzBar, 0, _b)
+    array.set(zzDir, 0, _h)
+
+// تحديث ZigZag عند إغلاق الشمعة فقط (No Repainting)
+if barstate.isconfirmed
+    // معالجة القمة
+    if not na(pivotHi)
+        lastDir = array.get(zzDir, 0)
+        lastP = array.get(zzPrice, 0)
+        if na(lastP)
+            f_addPivot(pivotHi, pivotIdx, true)
+        else if not lastDir
+            // آخر نقطة كانت قاع، إضافة قمة جديدة
+            f_addPivot(pivotHi, pivotIdx, true)
+        else if lastDir and pivotHi > lastP
+            // آخر نقطة كانت قمة، تحديث إذا كانت القمة الجديدة أعلى
+            array.set(zzPrice, 0, pivotHi)
+            array.set(zzBar, 0, pivotIdx)
+
+    // معالجة القاع
+    if not na(pivotLo)
+        lastDir = array.get(zzDir, 0)
+        lastP = array.get(zzPrice, 0)
+        if na(lastP)
+            f_addPivot(pivotLo, pivotIdx, false)
+        else if lastDir
+            // آخر نقطة كانت قمة، إضافة قاع جديد
+            f_addPivot(pivotLo, pivotIdx, false)
+        else if not lastDir and pivotLo < lastP
+            // آخر نقطة كانت قاع، تحديث إذا كان القاع الجديد أدنى
+            array.set(zzPrice, 0, pivotLo)
+            array.set(zzBar, 0, pivotIdx)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          استخراج نقاط XABCD                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// استخراج النقاط من المصفوفات
+float pD = array.get(zzPrice, 0)
+int bD = array.get(zzBar, 0)
+
+float pC = array.get(zzPrice, 1)
+int bC = array.get(zzBar, 1)
+
+float pB = array.get(zzPrice, 2)
+int bB = array.get(zzBar, 2)
+
+float pA = array.get(zzPrice, 3)
+int bA = array.get(zzBar, 3)
+
+float pX = array.get(zzPrice, 4)
+int bX = array.get(zzBar, 4)
+
+// التحقق من صحة النقاط
+validPivots = not na(pX) and not na(pA) and not na(pB) and not na(pC) and not na(pD)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          حساب النسب الصحيحة                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// حساب أطوال الأضلاع
+XA = math.abs(pA - pX)
+AB = math.abs(pB - pA)
+BC = math.abs(pC - pB)
+CD = math.abs(pD - pC)
+AD = math.abs(pD - pA)
+XC = math.abs(pC - pX)
+
+// حساب النسب الأساسية
+XAB = XA > 0 ? AB / XA : na  // نسبة تصحيح B من XA
+ABC = AB > 0 ? BC / AB : na  // نسبة تصحيح C من AB
+BCD = BC > 0 ? CD / BC : na  // نسبة امتداد D من BC
+XAD = XA > 0 ? AD / XA : na  // نسبة D من XA
+XCD = XC > 0 ? CD / XC : na  // نسبة D من XC (للـ Cypher)
+ABCD_ratio = AB > 0 ? CD / AB : na  // نسبة CD/AB للـ ABCD
+
+// تحديد الاتجاه
+isBull = pX < pA  // X أدنى من A = نموذج صعودي
+isBear = pX > pA  // X أعلى من A = نموذج هبوطي
+validDir = (isBull and i_show_bull) or (isBear and i_show_bear)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                      دوال كشف الأنماط بالنسب الصحيحة                         ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// Gartley: XAB = 0.618, ABC = 0.382-0.886, XAD = 0.786
+f_isGartley() =>
+    i_gartley and validPivots and validDir and
+     f_isRatio(XAB, 0.618, i_tolerance) and
+     f_inRange(ABC, 0.382, 0.886, i_tolerance) and
+     f_isRatio(XAD, 0.786, i_tolerance)
+
+// Bat: XAB = 0.382-0.5, ABC = 0.382-0.886, XAD = 0.886
+f_isBat() =>
+    i_bat and validPivots and validDir and
+     f_inRange(XAB, 0.382, 0.5, i_tolerance) and
+     f_inRange(ABC, 0.382, 0.886, i_tolerance) and
+     f_isRatio(XAD, 0.886, i_tolerance)
+
+// Butterfly: XAB = 0.786, ABC = 0.382-0.886, XAD = 1.27 or 1.618
+f_isButterfly() =>
+    i_butterfly and validPivots and validDir and
+     f_isRatio(XAB, 0.786, i_tolerance) and
+     f_inRange(ABC, 0.382, 0.886, i_tolerance) and
+     (f_isRatio(XAD, 1.27, i_tolerance + 0.05) or f_isRatio(XAD, 1.618, i_tolerance + 0.05))
+
+// Crab: XAB = 0.382-0.618, ABC = 0.382-0.886, XAD = 1.618
+f_isCrab() =>
+    i_crab and validPivots and validDir and
+     f_inRange(XAB, 0.382, 0.618, i_tolerance) and
+     f_inRange(ABC, 0.382, 0.886, i_tolerance) and
+     f_isRatio(XAD, 1.618, i_tolerance + 0.1)
+
+// Shark: XAB = 0.382-0.618, ABC = 1.13-1.618, XAD = 0.886-1.13
+f_isShark() =>
+    i_shark and validPivots and validDir and
+     f_inRange(XAB, 0.382, 0.618, i_tolerance) and
+     f_inRange(ABC, 1.13, 1.618, i_tolerance) and
+     f_inRange(XAD, 0.886, 1.13, i_tolerance)
+
+// Cypher: XAB = 0.382-0.618, XCD = 0.786
+f_isCypher() =>
+    i_cypher and validPivots and validDir and
+     f_inRange(XAB, 0.382, 0.618, i_tolerance) and
+     f_isRatio(XCD, 0.786, i_tolerance)
+
+// ABCD: ABC = 0.382-0.886, CD/AB = 1.0 or 1.272 or 1.618
+f_isABCD() =>
+    i_abcd and validPivots and validDir and
+     f_inRange(ABC, 0.382, 0.886, i_tolerance) and
+     (f_isRatio(ABCD_ratio, 1.0, i_tolerance) or
+      f_isRatio(ABCD_ratio, 1.272, i_tolerance) or
+      f_isRatio(ABCD_ratio, 1.618, i_tolerance))
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                         مصفوفات الرسم والتنظيف                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var line[] gLines = array.new_line()
+var label[] gLabels = array.new_label()
+var linefill[] gFills = array.new_linefill()
+var box[] gBoxes = array.new_box()
+var int lastPatternBar = 0
+
+// دالة تنظيف الرسومات القديمة
+f_cleanDrawings() =>
+    while array.size(gLines) > i_max_patterns * 20
+        line.delete(array.shift(gLines))
+    while array.size(gLabels) > i_max_patterns * 15
+        label.delete(array.shift(gLabels))
+    while array.size(gFills) > i_max_patterns * 4
+        linefill.delete(array.shift(gFills))
+    while array.size(gBoxes) > i_max_patterns * 2
+        box.delete(array.shift(gBoxes))
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          دالة الرسم الاحترافية                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+f_drawPattern(string _name) =>
+    col = i_pattern_color
+    fCol = color.new(col, i_fill_transp)
+    przCol = isBull ? i_prz_bull : i_prz_bear
+
+    // حساب امتداد الخطوط بناءً على طول النموذج
+    futureExtend = bD > bX ? math.round((bD - bX) * 0.5) : 30
+    futureExtend := math.max(futureExtend, 20)
+
+    // ═══════════════════════════════════════════════════════════════
+    //                    رسم الخطوط الرئيسية (XABCD)
+    // ═══════════════════════════════════════════════════════════════
+
+    // الخطوط المتصلة الرئيسية
+    lineXA = line.new(bX, pX, bA, pA, color=col, width=2, style=line.style_solid)
+    lineAB = line.new(bA, pA, bB, pB, color=col, width=2, style=line.style_solid)
+    lineBC = line.new(bB, pB, bC, pC, color=col, width=2, style=line.style_solid)
+    lineCD = line.new(bC, pC, bD, pD, color=col, width=2, style=line.style_solid)
+    array.push(gLines, lineXA)
+    array.push(gLines, lineAB)
+    array.push(gLines, lineBC)
+    array.push(gLines, lineCD)
+
+    // الخطوط المتقطعة (الربط الداخلي)
+    lineXB = line.new(bX, pX, bB, pB, color=col, width=1, style=line.style_dashed)
+    lineAC = line.new(bA, pA, bC, pC, color=col, width=1, style=line.style_dashed)
+    lineXD = line.new(bX, pX, bD, pD, color=col, width=1, style=line.style_dotted)
+    lineBD = line.new(bB, pB, bD, pD, color=col, width=1, style=line.style_dashed)
+    array.push(gLines, lineXB)
+    array.push(gLines, lineAC)
+    array.push(gLines, lineXD)
+    array.push(gLines, lineBD)
+
+    // ═══════════════════════════════════════════════════════════════
+    //                         تعبئة المناطق
+    // ═══════════════════════════════════════════════════════════════
+
+    array.push(gFills, linefill.new(lineXA, lineAB, fCol))
+    array.push(gFills, linefill.new(lineBC, lineCD, fCol))
+
+    // ═══════════════════════════════════════════════════════════════
+    //                          عرض النسب
+    // ═══════════════════════════════════════════════════════════════
+
+    if i_show_ratios
+        // XAB ratio (بين X و B)
+        array.push(gLabels, label.new(math.round((bX + bB) / 2), (pX + pB) / 2,
+             str.tostring(XAB, "#.###"),
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.small))
+
+        // ABC ratio (بين A و C)
+        array.push(gLabels, label.new(math.round((bA + bC) / 2), (pA + pC) / 2,
+             str.tostring(ABC, "#.###"),
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.small))
+
+        // BCD ratio (بين B و D)
+        array.push(gLabels, label.new(math.round((bB + bD) / 2), (pB + pD) / 2,
+             str.tostring(BCD, "#.###"),
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.small))
+
+        // XAD ratio (بين X و D)
+        array.push(gLabels, label.new(math.round((bX + bD) / 2), (pX + pD) / 2,
+             str.tostring(XAD, "#.###"),
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.small))
+
+    // ═══════════════════════════════════════════════════════════════
+    //                       تسميات النقاط (XABCD)
+    // ═══════════════════════════════════════════════════════════════
+
+    if i_show_labels
+        offset = XA * 0.03
+
+        // X
+        array.push(gLabels, label.new(bX, isBull ? pX - offset : pX + offset, "X",
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.normal))
+
+        // A
+        array.push(gLabels, label.new(bA, isBull ? pA + offset : pA - offset, "A",
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.normal))
+
+        // B
+        array.push(gLabels, label.new(bB, isBull ? pB - offset : pB + offset, "B",
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.normal))
+
+        // C
+        array.push(gLabels, label.new(bC, isBull ? pC + offset : pC - offset, "C",
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.normal))
+
+        // D
+        array.push(gLabels, label.new(bD, isBull ? pD - offset : pD + offset, "D",
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_center, size=size.normal))
+
+    // ═══════════════════════════════════════════════════════════════
+    //                        اسم النموذج والاتجاه
+    // ═══════════════════════════════════════════════════════════════
+
+    dirText = isBull ? "▲ BULLISH" : "▼ BEARISH"
+    nameColor = isBull ? color.new(#00BCD4, 20) : color.new(#FF5252, 20)
+
+    array.push(gLabels, label.new(
+         math.round((bA + bC) / 2),
+         isBull ? math.max(pA, pC) + XA * 0.08 : math.min(pA, pC) - XA * 0.08,
+         _name + "\n" + dirText,
+         color=nameColor, textcolor=color.white,
+         style=label.style_label_center, size=size.normal))
+
+    // ═══════════════════════════════════════════════════════════════
+    //                         منطقة PRZ
+    // ═══════════════════════════════════════════════════════════════
+
+    if i_show_prz
+        przHeight = CD * 0.15  // ارتفاع PRZ = 15% من CD
+        przTop = isBull ? pD + przHeight : pD
+        przBot = isBull ? pD : pD - przHeight
+
+        array.push(gBoxes, box.new(bD, przTop, bD + futureExtend, przBot,
+             border_color=col, bgcolor=przCol, border_width=1))
+
+        array.push(gLabels, label.new(bD + futureExtend, pD, "PRZ\n" + str.tostring(pD, format.mintick),
+             color=color.new(color.black, 100), textcolor=col,
+             style=label.style_label_left, size=size.small))
+
+    // ═══════════════════════════════════════════════════════════════
+    //                         وقف الخسارة (SL)
+    // ═══════════════════════════════════════════════════════════════
+
+    if i_show_sl
+        slLevel = isBull ? pD - CD * 0.2 : pD + CD * 0.2
+
+        array.push(gLines, line.new(bD, slLevel, bD + futureExtend, slLevel,
+             color=i_sl_color, width=2, style=line.style_solid))
+
+        array.push(gLabels, label.new(bD + futureExtend, slLevel,
+             "SL: " + str.tostring(slLevel, format.mintick),
+             color=color.new(color.black, 100), textcolor=i_sl_color,
+             style=label.style_label_left, size=size.tiny))
+
+    // ═══════════════════════════════════════════════════════════════
+    //                        الأهداف (TP1, TP2, TP3)
+    // ═══════════════════════════════════════════════════════════════
+
+    if i_show_targets
+        tp1 = isBull ? pD + CD * 0.382 : pD - CD * 0.382
+        tp2 = isBull ? pD + CD * 0.618 : pD - CD * 0.618
+        tp3 = isBull ? pD + CD * 1.0 : pD - CD * 1.0
+
+        // TP1
+        array.push(gLines, line.new(bD, tp1, bD + futureExtend, tp1,
+             color=i_target_color, width=1, style=line.style_dotted))
+        array.push(gLabels, label.new(bD + futureExtend, tp1,
+             "TP1 (0.382): " + str.tostring(tp1, format.mintick),
+             color=color.new(color.black, 100), textcolor=i_target_color,
+             style=label.style_label_left, size=size.tiny))
+
+        // TP2
+        array.push(gLines, line.new(bD, tp2, bD + futureExtend, tp2,
+             color=i_target_color, width=1, style=line.style_dotted))
+        array.push(gLabels, label.new(bD + futureExtend, tp2,
+             "TP2 (0.618): " + str.tostring(tp2, format.mintick),
+             color=color.new(color.black, 100), textcolor=i_target_color,
+             style=label.style_label_left, size=size.tiny))
+
+        // TP3
+        array.push(gLines, line.new(bD, tp3, bD + futureExtend, tp3,
+             color=i_target_color, width=1, style=line.style_dotted))
+        array.push(gLabels, label.new(bD + futureExtend, tp3,
+             "TP3 (1.0): " + str.tostring(tp3, format.mintick),
+             color=color.new(color.black, 100), textcolor=i_target_color,
+             style=label.style_label_left, size=size.tiny))
+
+    // تنظيف الرسومات القديمة
+    f_cleanDrawings()
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                            محرك كشف الأنماط                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var string patternName = ""
+var bool patternFound = false
+
+// التنفيذ فقط عند إغلاق الشمعة وتوفر نقاط صالحة
+if barstate.isconfirmed and validPivots and bD > lastPatternBar
+    patternFound := false
+    patternName := ""
+
+    // البحث عن الأنماط بالترتيب
+    if f_isGartley()
+        patternName := "GARTLEY"
+        patternFound := true
+    else if f_isBat()
+        patternName := "BAT"
+        patternFound := true
+    else if f_isButterfly()
+        patternName := "BUTTERFLY"
+        patternFound := true
+    else if f_isCrab()
+        patternName := "CRAB"
+        patternFound := true
+    else if f_isShark()
+        patternName := "SHARK"
+        patternFound := true
+    else if f_isCypher()
+        patternName := "CYPHER"
+        patternFound := true
+    else if f_isABCD()
+        patternName := "AB=CD"
+        patternFound := true
+
+    // رسم النموذج إذا تم العثور عليه
+    if patternFound
+        f_drawPattern(patternName)
+        lastPatternBar := bD
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              لوحة المعلومات                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var table infoPanel = table.new(position.top_right, 2, 10, bgcolor=color.new(#1a1a2e, 90), border_width=1, border_color=color.new(#00BCD4, 50))
+
+if barstate.islast
+    // Header
+    table.cell(infoPanel, 0, 0, "LEX-Q", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 40))
+    table.cell(infoPanel, 1, 0, "HARMONIC v2", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 40))
+
+    // Last Pattern
+    table.cell(infoPanel, 0, 1, "Pattern:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 1, patternName != "" ? patternName : "Scanning...", text_color=color.lime, text_size=size.tiny)
+
+    // Direction
+    table.cell(infoPanel, 0, 2, "Direction:", text_color=color.gray, text_size=size.tiny)
+    dirTxt = isBull ? "BULLISH" : isBear ? "BEARISH" : "N/A"
+    dirClr = isBull ? color.green : isBear ? color.red : color.gray
+    table.cell(infoPanel, 1, 2, dirTxt, text_color=dirClr, text_size=size.tiny)
+
+    // Ratios
+    table.cell(infoPanel, 0, 3, "XAB:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 3, str.tostring(nz(XAB, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 4, "ABC:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 4, str.tostring(nz(ABC, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 5, "BCD:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 5, str.tostring(nz(BCD, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 6, "XAD:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 6, str.tostring(nz(XAD, 0), "#.###"), text_color=color.yellow, text_size=size.tiny)
+
+    // Settings
+    table.cell(infoPanel, 0, 7, "Depth:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 7, str.tostring(i_depth), text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 8, "Tolerance:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 8, str.tostring(i_tolerance * 100, "#.#") + "%", text_color=color.gray, text_size=size.tiny)
+
+    // Status
+    table.cell(infoPanel, 0, 9, "Status:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 9, barstate.isconfirmed ? "CONFIRMED" : "PENDING", text_color=barstate.isconfirmed ? color.green : color.orange, text_size=size.tiny)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                             المخرجات البصرية                                 ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// إشارات التداول
+plotshape(patternFound and isBull, "Bullish Signal", shape.labelup, location.belowbar, color.new(#00BCD4, 0), size=size.normal, text="BUY", textcolor=color.white)
+plotshape(patternFound and isBear, "Bearish Signal", shape.labeldown, location.abovebar, color.new(#FF5252, 0), size=size.normal, text="SELL", textcolor=color.white)
+
+// خلفية التنبيه
+bgcolor(patternFound ? color.new(#00BCD4, 95) : na, title="Pattern Alert")
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                               التنبيهات                                      ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+alertcondition(patternFound and isBull, "Bullish Harmonic", "🎯 Bullish " + patternName + " pattern detected on {{ticker}} {{interval}}")
+alertcondition(patternFound and isBear, "Bearish Harmonic", "🎯 Bearish " + patternName + " pattern detected on {{ticker}} {{interval}}")
+alertcondition(patternFound, "Any Harmonic", "🎯 {{ticker}} {{interval}}: " + patternName + " Harmonic Pattern!")
