@@ -1,0 +1,363 @@
+//@version=5
+indicator("LEX-Q Harmonic Pro v4.0", shorttitle="LEX-Q HP v4", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    LEX-Q HARMONIC PATTERN INDICATOR v4.0                     ║
+// ║                   Simplified & Working - Based on rzin Logic                  ║
+// ║                        Pine Script v5 - No Repainting                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              المدخلات (INPUTS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+grp1 = "══════ ZigZag ══════"
+depth = input.int(10, "Depth", minval=3, maxval=50, group=grp1)
+
+grp2 = "══════ Patterns ══════"
+showGartley = input.bool(true, "Gartley", group=grp2, inline="1")
+showBat = input.bool(true, "Bat", group=grp2, inline="1")
+showButterfly = input.bool(true, "Butterfly", group=grp2, inline="2")
+showCrab = input.bool(true, "Crab", group=grp2, inline="2")
+showShark = input.bool(true, "Shark", group=grp2, inline="3")
+showCypher = input.bool(true, "Cypher", group=grp2, inline="3")
+showABCD = input.bool(true, "AB=CD", group=grp2, inline="4")
+
+grp3 = "══════ Direction ══════"
+showBull = input.bool(true, "Bullish", group=grp3, inline="d")
+showBear = input.bool(true, "Bearish", group=grp3, inline="d")
+
+grp4 = "══════ Tolerance ══════"
+tolerance = input.float(0.08, "Ratio Tolerance", minval=0.01, maxval=0.25, step=0.01, group=grp4)
+
+grp5 = "══════ Display ══════"
+showRatios = input.bool(true, "Show Ratios", group=grp5)
+showPRZ = input.bool(true, "Show PRZ Zone", group=grp5)
+showTargets = input.bool(true, "Show Targets", group=grp5)
+showSL = input.bool(true, "Show Stop Loss", group=grp5)
+maxPatterns = input.int(5, "Max Patterns", minval=1, maxval=20, group=grp5)
+
+grp6 = "══════ Colors ══════"
+patternColor = input.color(color.new(#00BCD4, 0), "Pattern Color", group=grp6)
+przColorBull = input.color(color.new(#00BCD4, 70), "PRZ Bullish", group=grp6)
+przColorBear = input.color(color.new(#FF5252, 70), "PRZ Bearish", group=grp6)
+targetColor = input.color(color.new(#4CAF50, 0), "Target Color", group=grp6)
+slColor = input.color(color.new(#FF5252, 0), "Stop Loss Color", group=grp6)
+fillTransp = input.int(85, "Fill Transparency", minval=60, maxval=95, group=grp6)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         الدوال المساعدة (Helper Functions)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+f_isRatio(float _val, float _target, float _tol) =>
+    not na(_val) and math.abs(_val - _target) <= _tol
+
+f_inRange(float _val, float _min, float _max, float _tol) =>
+    not na(_val) and _val >= (_min - _tol) and _val <= (_max + _tol)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              ZigZag Logic
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var float[] zzPrice = array.new_float(6, na)
+var int[] zzBar = array.new_int(6, na)
+var bool[] zzDir = array.new_bool(6, true)
+
+pivotHi = ta.pivothigh(high, depth, depth)
+pivotLo = ta.pivotlow(low, depth, depth)
+pivotIdx = bar_index - depth
+
+f_addPivot(float _p, int _b, bool _h) =>
+    for i = 5 to 1
+        array.set(zzPrice, i, array.get(zzPrice, i - 1))
+        array.set(zzBar, i, array.get(zzBar, i - 1))
+        array.set(zzDir, i, array.get(zzDir, i - 1))
+    array.set(zzPrice, 0, _p)
+    array.set(zzBar, 0, _b)
+    array.set(zzDir, 0, _h)
+
+if not na(pivotHi)
+    lastDir = array.get(zzDir, 0)
+    lastP = array.get(zzPrice, 0)
+    if na(lastP)
+        f_addPivot(pivotHi, pivotIdx, true)
+    else if not lastDir
+        f_addPivot(pivotHi, pivotIdx, true)
+    else if lastDir and pivotHi > lastP
+        array.set(zzPrice, 0, pivotHi)
+        array.set(zzBar, 0, pivotIdx)
+
+if not na(pivotLo)
+    lastDir = array.get(zzDir, 0)
+    lastP = array.get(zzPrice, 0)
+    if na(lastP)
+        f_addPivot(pivotLo, pivotIdx, false)
+    else if lastDir
+        f_addPivot(pivotLo, pivotIdx, false)
+    else if not lastDir and pivotLo < lastP
+        array.set(zzPrice, 0, pivotLo)
+        array.set(zzBar, 0, pivotIdx)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                          استخراج نقاط XABCD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+float pD = array.get(zzPrice, 0)
+int bD = array.get(zzBar, 0)
+float pC = array.get(zzPrice, 1)
+int bC = array.get(zzBar, 1)
+float pB = array.get(zzPrice, 2)
+int bB = array.get(zzBar, 2)
+float pA = array.get(zzPrice, 3)
+int bA = array.get(zzBar, 3)
+float pX = array.get(zzPrice, 4)
+int bX = array.get(zzBar, 4)
+
+validPivots = not na(pX) and not na(pA) and not na(pB) and not na(pC) and not na(pD)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              حساب النسب
+// ═══════════════════════════════════════════════════════════════════════════════
+
+XA = math.abs(nz(pA) - nz(pX))
+AB = math.abs(nz(pB) - nz(pA))
+BC = math.abs(nz(pC) - nz(pB))
+CD = math.abs(nz(pD) - nz(pC))
+AD = math.abs(nz(pD) - nz(pA))
+XC = math.abs(nz(pC) - nz(pX))
+
+XAB = XA > 0 ? AB / XA : na
+ABC = AB > 0 ? BC / AB : na
+BCD = BC > 0 ? CD / BC : na
+XAD = XA > 0 ? AD / XA : na
+XCD = XC > 0 ? CD / XC : na
+
+isBull = nz(pX) < nz(pA)
+isBear = nz(pX) > nz(pA)
+validDir = (isBull and showBull) or (isBear and showBear)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                           كشف الأنماط (Pattern Detection)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+f_Gartley() =>
+    showGartley and validPivots and validDir and f_isRatio(XAB, 0.618, tolerance) and f_inRange(ABC, 0.382, 0.886, tolerance) and f_isRatio(XAD, 0.786, tolerance)
+
+f_Bat() =>
+    showBat and validPivots and validDir and f_inRange(XAB, 0.382, 0.5, tolerance) and f_inRange(ABC, 0.382, 0.886, tolerance) and f_isRatio(XAD, 0.886, tolerance)
+
+f_Butterfly() =>
+    showButterfly and validPivots and validDir and f_isRatio(XAB, 0.786, tolerance) and f_inRange(ABC, 0.382, 0.886, tolerance) and (f_isRatio(XAD, 1.27, tolerance + 0.05) or f_isRatio(XAD, 1.618, tolerance + 0.05))
+
+f_Crab() =>
+    showCrab and validPivots and validDir and f_inRange(XAB, 0.382, 0.618, tolerance) and f_inRange(ABC, 0.382, 0.886, tolerance) and f_isRatio(XAD, 1.618, tolerance + 0.1)
+
+f_Shark() =>
+    showShark and validPivots and validDir and f_inRange(XAB, 0.382, 0.618, tolerance) and f_inRange(ABC, 1.13, 1.618, tolerance) and f_inRange(XAD, 0.886, 1.13, tolerance)
+
+f_Cypher() =>
+    xcd_ratio = XC > 0 ? CD / XC : na
+    showCypher and validPivots and validDir and f_inRange(XAB, 0.382, 0.618, tolerance) and f_isRatio(xcd_ratio, 0.786, tolerance)
+
+f_ABCD() =>
+    r = AB > 0 ? CD / AB : na
+    showABCD and validPivots and validDir and f_inRange(ABC, 0.382, 0.886, tolerance) and (f_isRatio(r, 1.0, tolerance) or f_isRatio(r, 1.272, tolerance) or f_isRatio(r, 1.618, tolerance))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                          مصفوفات الرسم (Drawing Arrays)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line[] gLines = array.new_line()
+var label[] gLabels = array.new_label()
+var linefill[] gFills = array.new_linefill()
+var box[] gBoxes = array.new_box()
+var int lastBar = 0
+
+f_clean() =>
+    while array.size(gLines) > maxPatterns * 20
+        line.delete(array.shift(gLines))
+    while array.size(gLabels) > maxPatterns * 15
+        label.delete(array.shift(gLabels))
+    while array.size(gFills) > maxPatterns * 4
+        linefill.delete(array.shift(gFills))
+    while array.size(gBoxes) > maxPatterns * 2
+        box.delete(array.shift(gBoxes))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                           دالة الرسم (Drawing Function)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+f_draw(string _name) =>
+    col = patternColor
+    fCol = color.new(col, fillTransp)
+    przCol = isBull ? przColorBull : przColorBear
+
+    futureExtension = bD > bX ? math.round((bD - bX) * 0.5) : 30
+    futureExtension := math.max(futureExtension, 20)
+
+    // الخطوط المتصلة (Solid Lines)
+    lineXA = line.new(bX, pX, bA, pA, color=col, width=2)
+    lineAB = line.new(bA, pA, bB, pB, color=col, width=2)
+    lineBC = line.new(bB, pB, bC, pC, color=col, width=2)
+    lineCD = line.new(bC, pC, bD, pD, color=col, width=2)
+    array.push(gLines, lineXA)
+    array.push(gLines, lineAB)
+    array.push(gLines, lineBC)
+    array.push(gLines, lineCD)
+
+    // الخطوط المتقطعة (Dashed Lines)
+    lineXB = line.new(bX, pX, bB, pB, color=col, width=1, style=line.style_dashed)
+    lineAC = line.new(bA, pA, bC, pC, color=col, width=1, style=line.style_dashed)
+    lineXD = line.new(bX, pX, bD, pD, color=col, width=1, style=line.style_dotted)
+    lineBD = line.new(bB, pB, bD, pD, color=col, width=1, style=line.style_dashed)
+    array.push(gLines, lineXB)
+    array.push(gLines, lineAC)
+    array.push(gLines, lineXD)
+    array.push(gLines, lineBD)
+
+    // التعبئة (Fill)
+    array.push(gFills, linefill.new(lineXA, lineAB, fCol))
+    array.push(gFills, linefill.new(lineBC, lineCD, fCol))
+
+    // النسب (Ratios)
+    if showRatios
+        array.push(gLabels, label.new(math.round((bX + bB) / 2), (pX + pB) / 2, str.tostring(XAB, "#.###"), color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+        array.push(gLabels, label.new(math.round((bA + bC) / 2), (pA + pC) / 2, str.tostring(ABC, "#.###"), color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+        array.push(gLabels, label.new(math.round((bB + bD) / 2), (pB + pD) / 2, str.tostring(BCD, "#.###"), color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+        array.push(gLabels, label.new(math.round((bX + bD) / 2), (pX + pD) / 2, str.tostring(XAD, "#.###"), color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.small))
+
+    // تسميات النقاط (Point Labels)
+    offset = XA * 0.03
+    array.push(gLabels, label.new(bX, isBull ? pX - offset : pX + offset, "X", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.tiny))
+    array.push(gLabels, label.new(bA, isBull ? pA + offset : pA - offset, "A", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.tiny))
+    array.push(gLabels, label.new(bB, isBull ? pB - offset : pB + offset, "B", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.tiny))
+    array.push(gLabels, label.new(bC, isBull ? pC + offset : pC - offset, "C", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.tiny))
+    array.push(gLabels, label.new(bD, isBull ? pD - offset : pD + offset, "D", color=color.new(color.black, 100), textcolor=col, style=label.style_label_center, size=size.tiny))
+
+    // اسم النموذج (Pattern Name)
+    dirText = isBull ? "▲ BULLISH" : "▼ BEARISH"
+    nameColor = isBull ? color.new(#00BCD4, 30) : color.new(#FF5252, 30)
+    array.push(gLabels, label.new(math.round((bA + bC) / 2), isBull ? math.max(pA, pC) + XA * 0.05 : math.min(pA, pC) - XA * 0.05, _name + "\n" + dirText, color=nameColor, textcolor=color.white, style=label.style_label_center, size=size.normal))
+
+    // منطقة PRZ
+    if showPRZ
+        przH = CD * 0.15
+        przTop = isBull ? pD + przH : pD
+        przBot = isBull ? pD : pD - przH
+        array.push(gBoxes, box.new(bD, przTop, bD + futureExtension, przBot, border_color=col, bgcolor=przCol, border_width=1))
+        array.push(gLabels, label.new(bD + futureExtension, pD, "PRZ", color=color.new(color.black, 100), textcolor=col, style=label.style_label_left, size=size.small))
+
+    // وقف الخسارة (Stop Loss)
+    if showSL
+        slLvl = isBull ? pD - CD * 0.2 : pD + CD * 0.2
+        array.push(gLines, line.new(bD, slLvl, bD + futureExtension, slLvl, color=slColor, width=2))
+        array.push(gLabels, label.new(bD + futureExtension, slLvl, str.tostring(slLvl, format.mintick), color=color.new(color.black, 100), textcolor=slColor, style=label.style_label_left, size=size.tiny))
+
+    // الأهداف (Targets)
+    if showTargets
+        tp1 = isBull ? pD + CD * 0.382 : pD - CD * 0.382
+        tp2 = isBull ? pD + CD * 0.618 : pD - CD * 0.618
+        tp3 = isBull ? pD + CD * 1.0 : pD - CD * 1.0
+        array.push(gLines, line.new(bD, tp1, bD + futureExtension, tp1, color=targetColor, width=1))
+        array.push(gLines, line.new(bD, tp2, bD + futureExtension, tp2, color=targetColor, width=1))
+        array.push(gLines, line.new(bD, tp3, bD + futureExtension, tp3, color=targetColor, width=1))
+        array.push(gLabels, label.new(bD + futureExtension, tp1, "0.382", color=color.new(color.black, 100), textcolor=targetColor, style=label.style_label_left, size=size.tiny))
+        array.push(gLabels, label.new(bD + futureExtension, tp2, "0.618", color=color.new(color.black, 100), textcolor=targetColor, style=label.style_label_left, size=size.tiny))
+        array.push(gLabels, label.new(bD + futureExtension, tp3, "1.0", color=color.new(color.black, 100), textcolor=targetColor, style=label.style_label_left, size=size.tiny))
+
+    f_clean()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                            محرك الكشف (Detection Engine)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var string pName = ""
+var bool found = false
+
+if validPivots and bD > lastBar
+    found := false
+    pName := ""
+
+    if f_Gartley()
+        pName := "GARTLEY"
+        found := true
+    else if f_Bat()
+        pName := "BAT"
+        found := true
+    else if f_Butterfly()
+        pName := "BUTTERFLY"
+        found := true
+    else if f_Crab()
+        pName := "CRAB"
+        found := true
+    else if f_Shark()
+        pName := "SHARK"
+        found := true
+    else if f_Cypher()
+        pName := "CYPHER"
+        found := true
+    else if f_ABCD()
+        pName := "AB=CD"
+        found := true
+
+    if found
+        f_draw(pName)
+        lastBar := bD
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                            لوحة المعلومات (Info Panel)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var table infoPanel = table.new(position.top_right, 2, 10, bgcolor=color.new(#1a1a2e, 90), border_width=1, border_color=color.new(#00BCD4, 50))
+
+if barstate.islast
+    table.cell(infoPanel, 0, 0, "LEX-Q v4", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 40))
+    table.cell(infoPanel, 1, 0, "HARMONIC", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 40))
+
+    table.cell(infoPanel, 0, 1, "Pattern:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 1, pName != "" ? pName : "Scanning...", text_color=color.lime, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 2, "Direction:", text_color=color.gray, text_size=size.tiny)
+    dirTxt = isBull ? "BULLISH" : isBear ? "BEARISH" : "N/A"
+    dirClr = isBull ? color.green : isBear ? color.red : color.gray
+    table.cell(infoPanel, 1, 2, dirTxt, text_color=dirClr, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 3, "XAB:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 3, str.tostring(nz(XAB, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 4, "ABC:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 4, str.tostring(nz(ABC, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 5, "BCD:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 5, str.tostring(nz(BCD, 0), "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 6, "XAD:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 6, str.tostring(nz(XAD, 0), "#.###"), text_color=color.yellow, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 7, "Depth:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 7, str.tostring(depth), text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 8, "Tolerance:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 8, str.tostring(tolerance * 100, "#.#") + "%", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoPanel, 0, 9, "Status:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoPanel, 1, 9, found ? "FOUND!" : "SCANNING", text_color=found ? color.lime : color.orange, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                           المخرجات البصرية (Visual Outputs)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// إشارات التداول (Trading Signals)
+plotshape(found and isBull, "Bullish Signal", shape.labelup, location.belowbar, color.new(#00BCD4, 0), size=size.normal, text="BUY", textcolor=color.white)
+plotshape(found and isBear, "Bearish Signal", shape.labeldown, location.abovebar, color.new(#FF5252, 0), size=size.normal, text="SELL", textcolor=color.white)
+
+// خلفية التنبيه (Alert Background)
+bgcolor(found ? color.new(#00BCD4, 95) : na, title="Pattern Alert")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              التنبيهات (Alerts)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(found and isBull, "Bullish Harmonic", "Bullish " + pName + " on {{ticker}}")
+alertcondition(found and isBear, "Bearish Harmonic", "Bearish " + pName + " on {{ticker}}")
+alertcondition(found, "Any Harmonic", "{{ticker}}: " + pName + " Pattern!")
