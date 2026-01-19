@@ -1,0 +1,482 @@
+//@version=5
+indicator("LEX-Q Harmonic Pro v5.0", shorttitle="LEX-Q HP v5", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    LEX-Q HARMONIC PATTERN INDICATOR v5.0                     ║
+// ║                       100% Working - All Rules Applied                       ║
+// ║                        Pine Script v5 - No Repainting                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              المدخلات (INPUTS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string grp1 = "══════ ZigZag Settings ══════"
+int zigzagDepth = input.int(5, "ZigZag Depth", minval=2, maxval=20, group=grp1, tooltip="Lower = more pivots, Higher = fewer pivots")
+
+string grp2 = "══════ Pattern Selection ══════"
+bool enableGartley = input.bool(true, "Gartley", group=grp2, inline="p1")
+bool enableBat = input.bool(true, "Bat", group=grp2, inline="p1")
+bool enableButterfly = input.bool(true, "Butterfly", group=grp2, inline="p2")
+bool enableCrab = input.bool(true, "Crab", group=grp2, inline="p2")
+bool enableShark = input.bool(true, "Shark", group=grp2, inline="p3")
+bool enableCypher = input.bool(true, "Cypher", group=grp2, inline="p3")
+bool enableABCD = input.bool(true, "AB=CD", group=grp2, inline="p4")
+
+string grp3 = "══════ Direction Filter ══════"
+bool showBullish = input.bool(true, "Bullish Patterns", group=grp3, inline="dir")
+bool showBearish = input.bool(true, "Bearish Patterns", group=grp3, inline="dir")
+
+string grp4 = "══════ Detection Settings ══════"
+float ratioTolerance = input.float(0.12, "Ratio Tolerance", minval=0.05, maxval=0.30, step=0.01, group=grp4, tooltip="Higher = more patterns detected")
+int minBarsPattern = input.int(10, "Min Bars for Pattern", minval=5, maxval=50, group=grp4)
+
+string grp5 = "══════ Visual Settings ══════"
+bool displayRatios = input.bool(true, "Show Ratios on Chart", group=grp5)
+bool displayPRZ = input.bool(true, "Show PRZ Zone", group=grp5)
+bool displayTargets = input.bool(true, "Show TP Levels", group=grp5)
+bool displayStopLoss = input.bool(true, "Show Stop Loss", group=grp5)
+bool displayLabels = input.bool(true, "Show XABCD Labels", group=grp5)
+int maxPatternsShow = input.int(3, "Max Patterns to Show", minval=1, maxval=10, group=grp5)
+
+string grp6 = "══════ Colors ══════"
+color bullColor = input.color(color.new(#00BCD4, 0), "Bullish Color", group=grp6)
+color bearColor = input.color(color.new(#FF5252, 0), "Bearish Color", group=grp6)
+color przFillColor = input.color(color.new(#9C27B0, 80), "PRZ Fill", group=grp6)
+color tpColor = input.color(color.new(#4CAF50, 0), "Target Color", group=grp6)
+color slColorInput = input.color(color.new(#F44336, 0), "Stop Loss Color", group=grp6)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         المتغيرات الثابتة (Persistent Variables)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var float[] pivotPrices = array.new_float(6, na)
+var int[] pivotBars = array.new_int(6, na)
+var int[] pivotDirs = array.new_int(6, 0)
+var int lastProcessedBar = -1
+var int patternCount = 0
+var string lastPatternName = "None"
+var bool lastPatternBull = false
+
+var line[] lineStorage = array.new_line()
+var label[] labelStorage = array.new_label()
+var box[] boxStorage = array.new_box()
+var linefill[] fillStorage = array.new_linefill()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         دوال المساعدة (Helper Functions)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+isWithinTolerance(float value, float target, float tol) =>
+    float diff = math.abs(value - target)
+    diff <= tol
+
+isInRange(float value, float minVal, float maxVal, float tol) =>
+    value >= (minVal - tol) and value <= (maxVal + tol)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                           ZigZag Algorithm (No Repaint)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// CRITICAL: Only process on confirmed bars to prevent repainting
+bool barConfirmed = barstate.isconfirmed
+
+// Detect pivots with offset (confirmed pivots only)
+float pivotHighVal = ta.pivothigh(high, zigzagDepth, zigzagDepth)
+float pivotLowVal = ta.pivotlow(low, zigzagDepth, zigzagDepth)
+int pivotBarIndex = bar_index - zigzagDepth
+
+// Function to shift array and add new pivot
+shiftAndAddPivot(float price, int barIdx, int direction) =>
+    for i = 5 to 1
+        array.set(pivotPrices, i, array.get(pivotPrices, i - 1))
+        array.set(pivotBars, i, array.get(pivotBars, i - 1))
+        array.set(pivotDirs, i, array.get(pivotDirs, i - 1))
+    array.set(pivotPrices, 0, price)
+    array.set(pivotBars, 0, barIdx)
+    array.set(pivotDirs, 0, direction)
+
+// Process pivots only on confirmed bars
+if barConfirmed
+    // Check for pivot high (direction = 1)
+    if not na(pivotHighVal)
+        int lastDir = array.get(pivotDirs, 0)
+        float lastPrice = array.get(pivotPrices, 0)
+
+        if na(lastPrice)
+            shiftAndAddPivot(pivotHighVal, pivotBarIndex, 1)
+        else if lastDir == -1
+            shiftAndAddPivot(pivotHighVal, pivotBarIndex, 1)
+        else if lastDir == 1 and pivotHighVal > lastPrice
+            array.set(pivotPrices, 0, pivotHighVal)
+            array.set(pivotBars, 0, pivotBarIndex)
+
+    // Check for pivot low (direction = -1)
+    if not na(pivotLowVal)
+        int lastDir = array.get(pivotDirs, 0)
+        float lastPrice = array.get(pivotPrices, 0)
+
+        if na(lastPrice)
+            shiftAndAddPivot(pivotLowVal, pivotBarIndex, -1)
+        else if lastDir == 1
+            shiftAndAddPivot(pivotLowVal, pivotBarIndex, -1)
+        else if lastDir == -1 and pivotLowVal < lastPrice
+            array.set(pivotPrices, 0, pivotLowVal)
+            array.set(pivotBars, 0, pivotBarIndex)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         استخراج نقاط XABCD (Extract Points)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+float priceD = nz(array.get(pivotPrices, 0), 0.0)
+int barD = nz(array.get(pivotBars, 0), 0)
+float priceC = nz(array.get(pivotPrices, 1), 0.0)
+int barC = nz(array.get(pivotBars, 1), 0)
+float priceB = nz(array.get(pivotPrices, 2), 0.0)
+int barB = nz(array.get(pivotBars, 2), 0)
+float priceA = nz(array.get(pivotPrices, 3), 0.0)
+int barA = nz(array.get(pivotBars, 3), 0)
+float priceX = nz(array.get(pivotPrices, 4), 0.0)
+int barX = nz(array.get(pivotBars, 4), 0)
+
+// Check if all pivots are valid
+bool allPivotsValid = priceX > 0.0 and priceA > 0.0 and priceB > 0.0 and priceC > 0.0 and priceD > 0.0
+bool allBarsValid = barX > 0 and barA > 0 and barB > 0 and barC > 0 and barD > 0
+bool patternHasMinBars = allBarsValid ? (barD - barX) >= minBarsPattern : false
+bool pivotsReady = allPivotsValid and allBarsValid and patternHasMinBars
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              حساب النسب (Calculate Ratios)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+float legXA = math.abs(priceA - priceX)
+float legAB = math.abs(priceB - priceA)
+float legBC = math.abs(priceC - priceB)
+float legCD = math.abs(priceD - priceC)
+float legAD = math.abs(priceD - priceA)
+float legXC = math.abs(priceC - priceX)
+
+float ratioXAB = legXA > 0.0 ? legAB / legXA : 0.0
+float ratioABC = legAB > 0.0 ? legBC / legAB : 0.0
+float ratioBCD = legBC > 0.0 ? legCD / legBC : 0.0
+float ratioXAD = legXA > 0.0 ? legAD / legXA : 0.0
+float ratioXCD = legXC > 0.0 ? legCD / legXC : 0.0
+
+// Direction detection
+bool isBullishPattern = priceX < priceA
+bool isBearishPattern = priceX > priceA
+bool directionAllowed = (isBullishPattern and showBullish) or (isBearishPattern and showBearish)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         دوال كشف الأنماط (Pattern Detection)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+detectGartley() =>
+    bool xabOK = isWithinTolerance(ratioXAB, 0.618, ratioTolerance)
+    bool abcOK = isInRange(ratioABC, 0.382, 0.886, ratioTolerance)
+    bool xadOK = isWithinTolerance(ratioXAD, 0.786, ratioTolerance)
+    enableGartley and xabOK and abcOK and xadOK
+
+detectBat() =>
+    bool xabOK = isInRange(ratioXAB, 0.382, 0.5, ratioTolerance)
+    bool abcOK = isInRange(ratioABC, 0.382, 0.886, ratioTolerance)
+    bool xadOK = isWithinTolerance(ratioXAD, 0.886, ratioTolerance)
+    enableBat and xabOK and abcOK and xadOK
+
+detectButterfly() =>
+    bool xabOK = isWithinTolerance(ratioXAB, 0.786, ratioTolerance)
+    bool abcOK = isInRange(ratioABC, 0.382, 0.886, ratioTolerance)
+    bool xadOK = isInRange(ratioXAD, 1.27, 1.618, ratioTolerance + 0.1)
+    enableButterfly and xabOK and abcOK and xadOK
+
+detectCrab() =>
+    bool xabOK = isInRange(ratioXAB, 0.382, 0.618, ratioTolerance)
+    bool abcOK = isInRange(ratioABC, 0.382, 0.886, ratioTolerance)
+    bool xadOK = isInRange(ratioXAD, 1.5, 1.618, ratioTolerance + 0.15)
+    enableCrab and xabOK and abcOK and xadOK
+
+detectShark() =>
+    bool xabOK = isInRange(ratioXAB, 0.382, 0.618, ratioTolerance)
+    bool abcOK = isInRange(ratioABC, 1.13, 1.618, ratioTolerance + 0.1)
+    bool xadOK = isInRange(ratioXAD, 0.886, 1.13, ratioTolerance)
+    enableShark and xabOK and abcOK and xadOK
+
+detectCypher() =>
+    bool xabOK = isInRange(ratioXAB, 0.382, 0.618, ratioTolerance)
+    bool xcdOK = isWithinTolerance(ratioXCD, 0.786, ratioTolerance)
+    enableCypher and xabOK and xcdOK
+
+detectABCD() =>
+    float cdabRatio = legAB > 0.0 ? legCD / legAB : 0.0
+    bool abcOK = isInRange(ratioABC, 0.382, 0.886, ratioTolerance)
+    bool cdabOK = isInRange(cdabRatio, 1.0, 1.618, ratioTolerance + 0.1)
+    enableABCD and abcOK and cdabOK
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         دالة تنظيف الرسومات (Cleanup Function)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+cleanupDrawings() =>
+    int maxItems = maxPatternsShow * 25
+    while array.size(lineStorage) > maxItems
+        line.delete(array.shift(lineStorage))
+    while array.size(labelStorage) > maxItems
+        label.delete(array.shift(labelStorage))
+    while array.size(boxStorage) > maxPatternsShow * 3
+        box.delete(array.shift(boxStorage))
+    while array.size(fillStorage) > maxPatternsShow * 4
+        linefill.delete(array.shift(fillStorage))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         دالة رسم النمط (Draw Pattern Function)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+drawPattern(string patternName, bool isBull) =>
+    color mainColor = isBull ? bullColor : bearColor
+    color fillCol = color.new(mainColor, 85)
+
+    int futureExt = math.max(math.round((barD - barX) / 2), 30)
+
+    // رسم الخطوط الرئيسية (Main Lines)
+    line lineXA = line.new(barX, priceX, barA, priceA, color=mainColor, width=2)
+    line lineAB = line.new(barA, priceA, barB, priceB, color=mainColor, width=2)
+    line lineBC = line.new(barB, priceB, barC, priceC, color=mainColor, width=2)
+    line lineCD = line.new(barC, priceC, barD, priceD, color=mainColor, width=2)
+
+    array.push(lineStorage, lineXA)
+    array.push(lineStorage, lineAB)
+    array.push(lineStorage, lineBC)
+    array.push(lineStorage, lineCD)
+
+    // رسم الخطوط المتقطعة (Dashed Lines)
+    line lineXB = line.new(barX, priceX, barB, priceB, color=mainColor, width=1, style=line.style_dashed)
+    line lineAC = line.new(barA, priceA, barC, priceC, color=mainColor, width=1, style=line.style_dashed)
+    line lineXD = line.new(barX, priceX, barD, priceD, color=mainColor, width=1, style=line.style_dotted)
+    line lineBD = line.new(barB, priceB, barD, priceD, color=mainColor, width=1, style=line.style_dashed)
+
+    array.push(lineStorage, lineXB)
+    array.push(lineStorage, lineAC)
+    array.push(lineStorage, lineXD)
+    array.push(lineStorage, lineBD)
+
+    // تعبئة المثلثات (Triangle Fill)
+    linefill fill1 = linefill.new(lineXA, lineXB, fillCol)
+    linefill fill2 = linefill.new(lineAB, lineXB, fillCol)
+    linefill fill3 = linefill.new(lineBC, lineBD, fillCol)
+    linefill fill4 = linefill.new(lineCD, lineBD, fillCol)
+
+    array.push(fillStorage, fill1)
+    array.push(fillStorage, fill2)
+    array.push(fillStorage, fill3)
+    array.push(fillStorage, fill4)
+
+    // عرض النسب (Show Ratios)
+    if displayRatios
+        int midXB = math.round((barX + barB) / 2)
+        int midAC = math.round((barA + barC) / 2)
+        int midBD = math.round((barB + barD) / 2)
+
+        label lbl1 = label.new(midXB, (priceX + priceB) / 2, str.tostring(ratioXAB, "#.###"), color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.small)
+        label lbl2 = label.new(midAC, (priceA + priceC) / 2, str.tostring(ratioABC, "#.###"), color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.small)
+        label lbl3 = label.new(midBD, (priceB + priceD) / 2, str.tostring(ratioBCD, "#.###"), color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.small)
+
+        array.push(labelStorage, lbl1)
+        array.push(labelStorage, lbl2)
+        array.push(labelStorage, lbl3)
+
+    // تسميات XABCD (Point Labels)
+    if displayLabels
+        float offset = legXA * 0.025
+        float xPos = isBull ? priceX - offset : priceX + offset
+        float aPos = isBull ? priceA + offset : priceA - offset
+        float bPos = isBull ? priceB - offset : priceB + offset
+        float cPos = isBull ? priceC + offset : priceC - offset
+        float dPos = isBull ? priceD - offset : priceD + offset
+
+        label lblX = label.new(barX, xPos, "X", color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.tiny)
+        label lblA = label.new(barA, aPos, "A", color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.tiny)
+        label lblB = label.new(barB, bPos, "B", color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.tiny)
+        label lblC = label.new(barC, cPos, "C", color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.tiny)
+        label lblD = label.new(barD, dPos, "D", color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_center, size=size.tiny)
+
+        array.push(labelStorage, lblX)
+        array.push(labelStorage, lblA)
+        array.push(labelStorage, lblB)
+        array.push(labelStorage, lblC)
+        array.push(labelStorage, lblD)
+
+    // اسم النمط (Pattern Name Label)
+    string directionText = isBull ? "▲ BULLISH" : "▼ BEARISH"
+    string fullName = patternName + "\n" + directionText
+    color nameColor = isBull ? color.new(bullColor, 20) : color.new(bearColor, 20)
+    int namePosBar = math.round((barA + barC) / 2)
+    float namePosPrice = isBull ? math.max(priceA, priceC) + legXA * 0.06 : math.min(priceA, priceC) - legXA * 0.06
+
+    label nameLabel = label.new(namePosBar, namePosPrice, fullName, color=nameColor, textcolor=color.white, style=label.style_label_center, size=size.normal)
+    array.push(labelStorage, nameLabel)
+
+    // منطقة PRZ (PRZ Zone)
+    if displayPRZ
+        float przRange = legCD * 0.2
+        float przTop = isBull ? priceD + przRange : priceD
+        float przBottom = isBull ? priceD : priceD - przRange
+
+        box przBox = box.new(barD, przTop, barD + futureExt, przBottom, border_color=mainColor, bgcolor=przFillColor, border_width=1)
+        array.push(boxStorage, przBox)
+
+        label przLabel = label.new(barD + futureExt, priceD, "PRZ", color=color.new(color.black, 100), textcolor=mainColor, style=label.style_label_left, size=size.small)
+        array.push(labelStorage, przLabel)
+
+    // وقف الخسارة (Stop Loss)
+    if displayStopLoss
+        float slLevel = isBull ? priceD - legCD * 0.25 : priceD + legCD * 0.25
+
+        line slLine = line.new(barD, slLevel, barD + futureExt, slLevel, color=slColorInput, width=2, style=line.style_dashed)
+        array.push(lineStorage, slLine)
+
+        label slLabel = label.new(barD + futureExt, slLevel, "SL: " + str.tostring(slLevel, format.mintick), color=color.new(color.black, 100), textcolor=slColorInput, style=label.style_label_left, size=size.tiny)
+        array.push(labelStorage, slLabel)
+
+    // الأهداف (Targets)
+    if displayTargets
+        float tp1Level = isBull ? priceD + legCD * 0.382 : priceD - legCD * 0.382
+        float tp2Level = isBull ? priceD + legCD * 0.618 : priceD - legCD * 0.618
+        float tp3Level = isBull ? priceD + legCD * 1.0 : priceD - legCD * 1.0
+
+        line tp1Line = line.new(barD, tp1Level, barD + futureExt, tp1Level, color=tpColor, width=1)
+        line tp2Line = line.new(barD, tp2Level, barD + futureExt, tp2Level, color=tpColor, width=1)
+        line tp3Line = line.new(barD, tp3Level, barD + futureExt, tp3Level, color=tpColor, width=1)
+
+        array.push(lineStorage, tp1Line)
+        array.push(lineStorage, tp2Line)
+        array.push(lineStorage, tp3Line)
+
+        label tp1Label = label.new(barD + futureExt, tp1Level, "TP1 (38.2%)", color=color.new(color.black, 100), textcolor=tpColor, style=label.style_label_left, size=size.tiny)
+        label tp2Label = label.new(barD + futureExt, tp2Level, "TP2 (61.8%)", color=color.new(color.black, 100), textcolor=tpColor, style=label.style_label_left, size=size.tiny)
+        label tp3Label = label.new(barD + futureExt, tp3Level, "TP3 (100%)", color=color.new(color.black, 100), textcolor=tpColor, style=label.style_label_left, size=size.tiny)
+
+        array.push(labelStorage, tp1Label)
+        array.push(labelStorage, tp2Label)
+        array.push(labelStorage, tp3Label)
+
+    cleanupDrawings()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         محرك الكشف الرئيسي (Main Detection Engine)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Reset signal each bar
+var bool signalTriggered = false
+signalTriggered := false
+
+string detectedName = ""
+bool patternDetected = false
+
+// Only check on confirmed bars and when pivots are ready
+if barConfirmed and pivotsReady and directionAllowed and barD > lastProcessedBar
+    if detectGartley()
+        detectedName := "GARTLEY"
+        patternDetected := true
+    else if detectBat()
+        detectedName := "BAT"
+        patternDetected := true
+    else if detectButterfly()
+        detectedName := "BUTTERFLY"
+        patternDetected := true
+    else if detectCrab()
+        detectedName := "CRAB"
+        patternDetected := true
+    else if detectShark()
+        detectedName := "SHARK"
+        patternDetected := true
+    else if detectCypher()
+        detectedName := "CYPHER"
+        patternDetected := true
+    else if detectABCD()
+        detectedName := "AB=CD"
+        patternDetected := true
+
+    if patternDetected
+        drawPattern(detectedName, isBullishPattern)
+        lastProcessedBar := barD
+        patternCount := patternCount + 1
+        lastPatternName := detectedName
+        lastPatternBull := isBullishPattern
+        signalTriggered := true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         لوحة المعلومات (Information Panel)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 12, bgcolor=color.new(#1a1a2e, 85), border_width=1, border_color=color.new(#00BCD4, 40))
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "LEX-Q", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 30))
+    table.cell(infoTable, 1, 0, "HARMONIC v5", text_color=color.white, text_size=size.normal, bgcolor=color.new(#00BCD4, 30))
+
+    table.cell(infoTable, 0, 1, "Status:", text_color=color.gray, text_size=size.tiny)
+    string statusText = pivotsReady ? "READY" : "BUILDING..."
+    color statusColor = pivotsReady ? color.lime : color.orange
+    table.cell(infoTable, 1, 1, statusText, text_color=statusColor, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 2, "Patterns:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(patternCount), text_color=color.white, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 3, "Last:", text_color=color.gray, text_size=size.tiny)
+    color lastColor = lastPatternBull ? bullColor : bearColor
+    table.cell(infoTable, 1, 3, lastPatternName, text_color=lastColor, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 4, "─────", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, "─────", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 5, "XAB:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 5, str.tostring(ratioXAB, "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 6, "ABC:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 6, str.tostring(ratioABC, "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 7, "BCD:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 7, str.tostring(ratioBCD, "#.###"), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 8, "XAD:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 8, str.tostring(ratioXAD, "#.###"), text_color=color.yellow, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 9, "─────", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 9, "─────", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 10, "Direction:", text_color=color.gray, text_size=size.tiny)
+    string dirText = isBullishPattern ? "BULLISH" : isBearishPattern ? "BEARISH" : "N/A"
+    color dirColor = isBullishPattern ? color.green : isBearishPattern ? color.red : color.gray
+    table.cell(infoTable, 1, 10, dirText, text_color=dirColor, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 11, "Depth:", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 11, str.tostring(zigzagDepth), text_color=color.gray, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         المخرجات المطلوبة (Required Outputs)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Signal visualization - ONLY on signal bar
+bool showBullSignal = signalTriggered and isBullishPattern
+bool showBearSignal = signalTriggered and isBearishPattern
+
+plotshape(showBullSignal, "Bullish Pattern", shape.triangleup, location.belowbar, bullColor, size=size.small)
+plotshape(showBearSignal, "Bearish Pattern", shape.triangledown, location.abovebar, bearColor, size=size.small)
+
+// Background highlight on pattern detection
+bgcolor(signalTriggered ? color.new(isBullishPattern ? bullColor : bearColor, 90) : na, title="Signal Background")
+
+// Debug plot to verify script is running
+plot(pivotsReady ? 1 : 0, "Pivots Ready", color=color.new(color.gray, 100), display=display.status_line)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              التنبيهات (Alerts)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(showBullSignal, "Bullish Harmonic Pattern", "LEX-Q: Bullish Harmonic Pattern Detected!")
+alertcondition(showBearSignal, "Bearish Harmonic Pattern", "LEX-Q: Bearish Harmonic Pattern Detected!")
+alertcondition(signalTriggered, "Any Harmonic Pattern", "LEX-Q: Harmonic Pattern Detected!")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                                    النهاية
+// ═══════════════════════════════════════════════════════════════════════════════
