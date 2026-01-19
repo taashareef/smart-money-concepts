@@ -1,0 +1,520 @@
+//@version=5
+indicator("Smart Money Concepts Advanced (SMC Pro)", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================================
+// القواعد المتبعة في هذا السكربت:
+// 1. إصدار v5 مع indicator()
+// 2. مسافات بادئة 4 مسافات
+// 3. استخدام = للتعريف الأول، := للتحديث، var للمتغيرات الثابتة
+// 4. استخدام input.int(), input.bool(), input.float() بدلاً من input()
+// 5. استخدام barstate.isconfirmed لمنع إعادة الرسم (No Repainting)
+// 6. استخدام nz() للقيم المفقودة و [1], [2] للقيم السابقة
+// 7. وجود دوال إخراج (plot, plotshape, box, line, label)
+// ============================================================================
+
+// ============================================================================
+// المدخلات العامة (General Inputs)
+// ============================================================================
+
+// --- Swing Settings ---
+grp_swing = "Swing Highs/Lows Settings"
+swing_length = input.int(10, "Swing Length", minval=1, group=grp_swing, tooltip="عدد الشموع للبحث عن القمم والقيعان")
+pivot_confirm = input.int(3, "Pivot Confirmation Bars", minval=1, group=grp_swing, tooltip="عدد الشموع لتأكيد النقطة المحورية - هذا يمنع إعادة الرسم")
+show_swing = input.bool(true, "Show Swing Points", group=grp_swing)
+show_zigzag = input.bool(true, "Show ZigZag Lines", group=grp_swing)
+color_swing_high = input.color(color.red, "Swing High Color", group=grp_swing)
+color_swing_low = input.color(color.green, "Swing Low Color", group=grp_swing)
+
+// --- FVG Settings ---
+grp_fvg = "Fair Value Gap (FVG)"
+show_fvg = input.bool(true, "Show FVG", group=grp_fvg)
+fvg_mitigation = input.bool(true, "Show FVG Mitigation", group=grp_fvg)
+fvg_extend = input.int(30, "FVG Extend Bars", minval=1, maxval=100, group=grp_fvg)
+fvg_bull_color = input.color(color.new(color.green, 85), "Bullish FVG", group=grp_fvg)
+fvg_bear_color = input.color(color.new(color.red, 85), "Bearish FVG", group=grp_fvg)
+
+// --- Order Blocks Settings ---
+grp_ob = "Order Blocks (OB)"
+show_ob = input.bool(true, "Show Order Blocks", group=grp_ob)
+ob_extend = input.int(25, "OB Extend Bars", minval=1, maxval=100, group=grp_ob)
+ob_bull_color = input.color(color.new(color.teal, 80), "Bullish OB", group=grp_ob)
+ob_bear_color = input.color(color.new(color.maroon, 80), "Bearish OB", group=grp_ob)
+
+// --- BOS/CHoCH Settings ---
+grp_struct = "Market Structure (BOS/CHoCH)"
+show_bos = input.bool(true, "Show Break of Structure", group=grp_struct)
+show_choch = input.bool(true, "Show Change of Character", group=grp_struct)
+color_bos = input.color(color.blue, "BOS Color", group=grp_struct)
+color_choch = input.color(color.orange, "CHoCH Color", group=grp_struct)
+
+// --- Liquidity Settings ---
+grp_liq = "Liquidity"
+show_liq = input.bool(true, "Show Liquidity Levels", group=grp_liq)
+liq_range_pct = input.float(0.5, "Liquidity Range %", minval=0.1, maxval=5.0, step=0.1, group=grp_liq)
+liq_bull_color = input.color(color.new(color.lime, 70), "Bullish Liquidity", group=grp_liq)
+liq_bear_color = input.color(color.new(color.fuchsia, 70), "Bearish Liquidity", group=grp_liq)
+
+// --- Sessions Settings ---
+grp_sess = "Trading Sessions"
+show_sessions = input.bool(false, "Show Sessions", group=grp_sess)
+sess_london_start = input.int(7, "London Start (UTC)", minval=0, maxval=23, group=grp_sess)
+sess_london_end = input.int(16, "London End (UTC)", minval=0, maxval=23, group=grp_sess)
+sess_ny_start = input.int(13, "New York Start (UTC)", minval=0, maxval=23, group=grp_sess)
+sess_ny_end = input.int(22, "New York End (UTC)", minval=0, maxval=23, group=grp_sess)
+sess_tokyo_start = input.int(0, "Tokyo Start (UTC)", minval=0, maxval=23, group=grp_sess)
+sess_tokyo_end = input.int(9, "Tokyo End (UTC)", minval=0, maxval=23, group=grp_sess)
+color_london = input.color(color.new(color.blue, 90), "London Session", group=grp_sess)
+color_ny = input.color(color.new(color.orange, 90), "New York Session", group=grp_sess)
+color_tokyo = input.color(color.new(color.purple, 90), "Tokyo Session", group=grp_sess)
+
+// --- Previous High/Low Settings ---
+grp_prev = "Previous Day High/Low"
+show_prev_hl = input.bool(true, "Show Previous Day H/L", group=grp_prev)
+color_prev_high = input.color(color.red, "Previous High Color", group=grp_prev)
+color_prev_low = input.color(color.green, "Previous Low Color", group=grp_prev)
+
+// ============================================================================
+// المتغيرات الثابتة (Persistent Variables using 'var')
+// ============================================================================
+
+// Swing tracking
+var float[] swing_highs_arr = array.new_float()
+var int[] swing_highs_bar_arr = array.new_int()
+var float[] swing_lows_arr = array.new_float()
+var int[] swing_lows_bar_arr = array.new_int()
+
+var float last_swing_high = na
+var int last_swing_high_bar = na
+var float last_swing_low = na
+var int last_swing_low_bar = na
+
+// Structure tracking
+var int trend_dir = 0  // 1 = bullish, -1 = bearish
+var float struct_high = na
+var float struct_low = na
+var float prev_struct_high = na
+var float prev_struct_low = na
+
+// FVG tracking
+var box[] fvg_boxes = array.new_box()
+var float[] fvg_tops = array.new_float()
+var float[] fvg_bottoms = array.new_float()
+var int[] fvg_types = array.new_int()  // 1 = bullish, -1 = bearish
+
+// Order Block tracking
+var box[] ob_boxes = array.new_box()
+var float[] ob_tops = array.new_float()
+var float[] ob_bottoms = array.new_float()
+var int[] ob_types = array.new_int()
+
+// Previous Day tracking
+var float prev_day_high = na
+var float prev_day_low = na
+var float current_day_high = na
+var float current_day_low = na
+
+// ============================================================================
+// الدوال المساعدة (Helper Functions)
+// ============================================================================
+
+// التحقق من قمة مؤكدة (Non-Repainting)
+f_is_confirmed_high(int len, int confirm) =>
+    idx = confirm
+    h = high[idx]
+    is_highest_before = h == ta.highest(high, len)[idx]
+    is_highest_after = true
+    for j = 1 to confirm - 1
+        if nz(high[j], 0.0) >= h
+            is_highest_after := false
+            break
+    result = is_highest_before and is_highest_after
+    [result, h, bar_index - idx]
+
+// التحقق من قاع مؤكد (Non-Repainting)
+f_is_confirmed_low(int len, int confirm) =>
+    idx = confirm
+    l = low[idx]
+    is_lowest_before = l == ta.lowest(low, len)[idx]
+    is_lowest_after = true
+    for j = 1 to confirm - 1
+        if nz(low[j], high) <= l
+            is_lowest_after := false
+            break
+    result = is_lowest_before and is_lowest_after
+    [result, l, bar_index - idx]
+
+// التحقق من الجلسة
+f_in_session(int start_hour, int end_hour) =>
+    current_hour = hour(time, "UTC")
+    if start_hour < end_hour
+        current_hour >= start_hour and current_hour < end_hour
+    else
+        current_hour >= start_hour or current_hour < end_hour
+
+// ============================================================================
+// حساب Swing Points المؤكدة (Non-Repainting)
+// ============================================================================
+
+[is_swing_high, swing_high_val, swing_high_bar_idx] = f_is_confirmed_high(swing_length, pivot_confirm)
+[is_swing_low, swing_low_val, swing_low_bar_idx] = f_is_confirmed_low(swing_length, pivot_confirm)
+
+// متغيرات محلية للتتبع
+var bool added_high = false
+var bool added_low = false
+
+// تحديث فقط عند إغلاق الشمعة
+if barstate.isconfirmed
+    added_high := false
+    added_low := false
+
+    // معالجة القمة الجديدة
+    if is_swing_high
+        // التحقق من عدم وجود قمتين متتاليتين
+        can_add = true
+        if array.size(swing_highs_bar_arr) > 0 and array.size(swing_lows_bar_arr) > 0
+            last_h_bar = array.get(swing_highs_bar_arr, array.size(swing_highs_bar_arr) - 1)
+            last_l_bar = array.get(swing_lows_bar_arr, array.size(swing_lows_bar_arr) - 1)
+            if last_h_bar > last_l_bar
+                // قمة بعد قمة - نحدث إذا كانت أعلى
+                if swing_high_val > array.get(swing_highs_arr, array.size(swing_highs_arr) - 1)
+                    array.set(swing_highs_arr, array.size(swing_highs_arr) - 1, swing_high_val)
+                    array.set(swing_highs_bar_arr, array.size(swing_highs_bar_arr) - 1, swing_high_bar_idx)
+                can_add := false
+
+        if can_add
+            array.push(swing_highs_arr, swing_high_val)
+            array.push(swing_highs_bar_arr, swing_high_bar_idx)
+            added_high := true
+
+        last_swing_high := swing_high_val
+        last_swing_high_bar := swing_high_bar_idx
+
+    // معالجة القاع الجديد
+    if is_swing_low
+        can_add = true
+        if array.size(swing_lows_bar_arr) > 0 and array.size(swing_highs_bar_arr) > 0
+            last_l_bar = array.get(swing_lows_bar_arr, array.size(swing_lows_bar_arr) - 1)
+            last_h_bar = array.get(swing_highs_bar_arr, array.size(swing_highs_bar_arr) - 1)
+            if last_l_bar > last_h_bar
+                // قاع بعد قاع - نحدث إذا كان أدنى
+                if swing_low_val < array.get(swing_lows_arr, array.size(swing_lows_arr) - 1)
+                    array.set(swing_lows_arr, array.size(swing_lows_arr) - 1, swing_low_val)
+                    array.set(swing_lows_bar_arr, array.size(swing_lows_bar_arr) - 1, swing_low_bar_idx)
+                can_add := false
+
+        if can_add
+            array.push(swing_lows_arr, swing_low_val)
+            array.push(swing_lows_bar_arr, swing_low_bar_idx)
+            added_low := true
+
+        last_swing_low := swing_low_val
+        last_swing_low_bar := swing_low_bar_idx
+
+// ============================================================================
+// رسم نقاط Swing
+// ============================================================================
+
+plotshape(show_swing and is_swing_high and barstate.isconfirmed ? high[pivot_confirm] : na,
+     title="Swing High Point",
+     style=shape.triangledown,
+     location=location.abovebar,
+     color=color_swing_high,
+     size=size.small,
+     offset=-pivot_confirm)
+
+plotshape(show_swing and is_swing_low and barstate.isconfirmed ? low[pivot_confirm] : na,
+     title="Swing Low Point",
+     style=shape.triangleup,
+     location=location.belowbar,
+     color=color_swing_low,
+     size=size.small,
+     offset=-pivot_confirm)
+
+// ============================================================================
+// رسم ZigZag Lines
+// ============================================================================
+
+if show_zigzag and barstate.isconfirmed
+    if is_swing_high and not na(last_swing_low) and not na(last_swing_low_bar)
+        line.new(last_swing_low_bar, last_swing_low, swing_high_bar_idx, swing_high_val,
+             color=color_swing_high, style=line.style_solid, width=1)
+
+    if is_swing_low and not na(last_swing_high) and not na(last_swing_high_bar)
+        line.new(last_swing_high_bar, last_swing_high, swing_low_bar_idx, swing_low_val,
+             color=color_swing_low, style=line.style_solid, width=1)
+
+// ============================================================================
+// Market Structure (BOS/CHoCH) - Non-Repainting
+// ============================================================================
+
+if barstate.isconfirmed
+    // تحديث هيكل السوق عند ظهور قمة جديدة
+    if is_swing_high
+        prev_struct_high := struct_high
+        struct_high := swing_high_val
+
+        // BOS صعودي
+        if not na(prev_struct_high) and swing_high_val > prev_struct_high and trend_dir == 1
+            if show_bos
+                line.new(swing_high_bar_idx - 10, prev_struct_high, bar_index, prev_struct_high,
+                     color=color_bos, style=line.style_solid, width=2)
+                label.new(bar_index, prev_struct_high, "BOS",
+                     color=color.new(color_bos, 60), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+
+        // CHoCH صعودي (تغيير من هبوطي إلى صعودي)
+        if not na(prev_struct_high) and swing_high_val > prev_struct_high and trend_dir == -1
+            if show_choch
+                line.new(swing_high_bar_idx - 10, prev_struct_high, bar_index, prev_struct_high,
+                     color=color_choch, style=line.style_dashed, width=2)
+                label.new(bar_index, prev_struct_high, "CHoCH",
+                     color=color.new(color_choch, 60), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+            trend_dir := 1
+
+    // تحديث هيكل السوق عند ظهور قاع جديد
+    if is_swing_low
+        prev_struct_low := struct_low
+        struct_low := swing_low_val
+
+        // BOS هبوطي
+        if not na(prev_struct_low) and swing_low_val < prev_struct_low and trend_dir == -1
+            if show_bos
+                line.new(swing_low_bar_idx - 10, prev_struct_low, bar_index, prev_struct_low,
+                     color=color_bos, style=line.style_solid, width=2)
+                label.new(bar_index, prev_struct_low, "BOS",
+                     color=color.new(color_bos, 60), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+
+        // CHoCH هبوطي (تغيير من صعودي إلى هبوطي)
+        if not na(prev_struct_low) and swing_low_val < prev_struct_low and trend_dir == 1
+            if show_choch
+                line.new(swing_low_bar_idx - 10, prev_struct_low, bar_index, prev_struct_low,
+                     color=color_choch, style=line.style_dashed, width=2)
+                label.new(bar_index, prev_struct_low, "CHoCH",
+                     color=color.new(color_choch, 60), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+            trend_dir := -1
+
+// تهيئة الاتجاه الأولي
+if trend_dir == 0 and not na(last_swing_high_bar) and not na(last_swing_low_bar)
+    trend_dir := last_swing_high_bar > last_swing_low_bar ? 1 : -1
+
+// ============================================================================
+// Fair Value Gap (FVG) - Non-Repainting
+// ============================================================================
+
+// FVG صعودي: low[1] > high[3] مع شمعة صعودية في المنتصف
+bull_fvg_cond = barstate.isconfirmed and low[1] > high[3] and close[2] > open[2]
+bull_fvg_top = low[1]
+bull_fvg_bottom = high[3]
+
+// FVG هبوطي: high[1] < low[3] مع شمعة هبوطية في المنتصف
+bear_fvg_cond = barstate.isconfirmed and high[1] < low[3] and close[2] < open[2]
+bear_fvg_top = low[3]
+bear_fvg_bottom = high[1]
+
+if show_fvg
+    if bull_fvg_cond
+        fvg_box = box.new(bar_index - 3, bull_fvg_top, bar_index - 1 + fvg_extend, bull_fvg_bottom,
+             bgcolor=fvg_bull_color, border_color=color.green, border_width=1)
+        array.push(fvg_boxes, fvg_box)
+        array.push(fvg_tops, bull_fvg_top)
+        array.push(fvg_bottoms, bull_fvg_bottom)
+        array.push(fvg_types, 1)
+
+    if bear_fvg_cond
+        fvg_box = box.new(bar_index - 3, bear_fvg_top, bar_index - 1 + fvg_extend, bear_fvg_bottom,
+             bgcolor=fvg_bear_color, border_color=color.red, border_width=1)
+        array.push(fvg_boxes, fvg_box)
+        array.push(fvg_tops, bear_fvg_top)
+        array.push(fvg_bottoms, bear_fvg_bottom)
+        array.push(fvg_types, -1)
+
+// التحقق من تخفيف FVG
+if show_fvg and fvg_mitigation and barstate.isconfirmed
+    for i = array.size(fvg_boxes) - 1 to 0
+        if i < array.size(fvg_boxes)
+            fvg_type = array.get(fvg_types, i)
+            fvg_t = array.get(fvg_tops, i)
+            fvg_b = array.get(fvg_bottoms, i)
+
+            // FVG صعودي يتم تخفيفه عندما يلمس السعر منطقة FVG
+            if fvg_type == 1 and low <= fvg_t
+                box.set_bgcolor(array.get(fvg_boxes, i), color.new(color.gray, 90))
+                box.set_border_color(array.get(fvg_boxes, i), color.gray)
+
+            // FVG هبوطي يتم تخفيفه عندما يلمس السعر منطقة FVG
+            if fvg_type == -1 and high >= fvg_b
+                box.set_bgcolor(array.get(fvg_boxes, i), color.new(color.gray, 90))
+                box.set_border_color(array.get(fvg_boxes, i), color.gray)
+
+// ============================================================================
+// Order Blocks - Non-Repainting
+// ============================================================================
+
+// OB صعودي: شمعة هبوطية تليها شمعة صعودية تكسر القمة
+bull_ob_cond = barstate.isconfirmed and close[1] > open[1] and close[2] < open[2] and close[1] > high[2]
+bear_ob_cond = barstate.isconfirmed and close[1] < open[1] and close[2] > open[2] and close[1] < low[2]
+
+if show_ob
+    if bull_ob_cond
+        ob_box = box.new(bar_index - 2, high[2], bar_index - 2 + ob_extend, low[2],
+             bgcolor=ob_bull_color, border_color=color.teal, border_width=1)
+        array.push(ob_boxes, ob_box)
+        array.push(ob_tops, high[2])
+        array.push(ob_bottoms, low[2])
+        array.push(ob_types, 1)
+        label.new(bar_index - 2, low[2], "OB",
+             color=color.new(color.teal, 70), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+
+    if bear_ob_cond
+        ob_box = box.new(bar_index - 2, high[2], bar_index - 2 + ob_extend, low[2],
+             bgcolor=ob_bear_color, border_color=color.maroon, border_width=1)
+        array.push(ob_boxes, ob_box)
+        array.push(ob_tops, high[2])
+        array.push(ob_bottoms, low[2])
+        array.push(ob_types, -1)
+        label.new(bar_index - 2, high[2], "OB",
+             color=color.new(color.maroon, 70), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+
+// ============================================================================
+// Liquidity Levels
+// ============================================================================
+
+// حساب نطاق السيولة
+liq_range = (ta.highest(high, 100) - ta.lowest(low, 100)) * liq_range_pct / 100
+
+// متغيرات للسيولة
+var float[] liq_highs = array.new_float()
+var int[] liq_high_bars = array.new_int()
+var float[] liq_lows = array.new_float()
+var int[] liq_low_bars = array.new_int()
+
+if show_liq and barstate.isconfirmed
+    // تحديث قمم السيولة
+    if is_swing_high
+        // البحث عن قمم متقاربة
+        found_close_high = false
+        for i = array.size(liq_highs) - 1 to 0
+            if i < array.size(liq_highs)
+                existing_high = array.get(liq_highs, i)
+                if math.abs(swing_high_val - existing_high) <= liq_range
+                    // رسم منطقة سيولة
+                    avg_level = (swing_high_val + existing_high) / 2
+                    existing_bar = array.get(liq_high_bars, i)
+                    line.new(existing_bar, avg_level, bar_index + 10, avg_level,
+                         color=liq_bull_color, style=line.style_dotted, width=2)
+                    label.new(bar_index + 10, avg_level, "BSL",
+                         color=color.new(liq_bull_color, 50), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    found_close_high := true
+                    break
+
+        if not found_close_high
+            array.push(liq_highs, swing_high_val)
+            array.push(liq_high_bars, swing_high_bar_idx)
+
+    // تحديث قيعان السيولة
+    if is_swing_low
+        found_close_low = false
+        for i = array.size(liq_lows) - 1 to 0
+            if i < array.size(liq_lows)
+                existing_low = array.get(liq_lows, i)
+                if math.abs(swing_low_val - existing_low) <= liq_range
+                    avg_level = (swing_low_val + existing_low) / 2
+                    existing_bar = array.get(liq_low_bars, i)
+                    line.new(existing_bar, avg_level, bar_index + 10, avg_level,
+                         color=liq_bear_color, style=line.style_dotted, width=2)
+                    label.new(bar_index + 10, avg_level, "SSL",
+                         color=color.new(liq_bear_color, 50), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    found_close_low := true
+                    break
+
+        if not found_close_low
+            array.push(liq_lows, swing_low_val)
+            array.push(liq_low_bars, swing_low_bar_idx)
+
+// ============================================================================
+// Trading Sessions
+// ============================================================================
+
+in_london = f_in_session(sess_london_start, sess_london_end)
+in_ny = f_in_session(sess_ny_start, sess_ny_end)
+in_tokyo = f_in_session(sess_tokyo_start, sess_tokyo_end)
+
+// رسم خلفية الجلسات
+bgcolor(show_sessions and in_london ? color_london : na, title="London Session")
+bgcolor(show_sessions and in_ny ? color_ny : na, title="New York Session")
+bgcolor(show_sessions and in_tokyo ? color_tokyo : na, title="Tokyo Session")
+
+// ============================================================================
+// Previous Day High/Low
+// ============================================================================
+
+// الحصول على أعلى وأدنى سعر لليوم السابق
+[prev_d_high, prev_d_low] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+// استخدام nz() للتعامل مع القيم المفقودة
+prev_day_high := nz(prev_d_high, prev_day_high)
+prev_day_low := nz(prev_d_low, prev_day_low)
+
+// رسم مستويات اليوم السابق
+plot(show_prev_hl ? prev_day_high : na, "Previous Day High", color=color_prev_high, style=plot.style_linebr, linewidth=2)
+plot(show_prev_hl ? prev_day_low : na, "Previous Day Low", color=color_prev_low, style=plot.style_linebr, linewidth=2)
+
+// ============================================================================
+// مخرجات الرسم الرئيسية (Required Output)
+// ============================================================================
+
+// رسم مستويات Swing الأخيرة
+plot(last_swing_high, "Last Swing High", color=color.new(color_swing_high, 70), style=plot.style_linebr, linewidth=1)
+plot(last_swing_low, "Last Swing Low", color=color.new(color_swing_low, 70), style=plot.style_linebr, linewidth=1)
+
+// خلفية اتجاه السوق
+trend_bg_color = trend_dir == 1 ? color.new(color.green, 95) :
+                 trend_dir == -1 ? color.new(color.red, 95) : na
+bgcolor(trend_bg_color, title="Trend Direction Background")
+
+// ============================================================================
+// جدول المعلومات
+// ============================================================================
+
+var table info_tbl = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.gray)
+
+if barstate.islast
+    // العنوان
+    table.cell(info_tbl, 0, 0, "SMC Pro", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 70))
+    table.cell(info_tbl, 1, 0, "v5.0", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 70))
+
+    // الاتجاه
+    table.cell(info_tbl, 0, 1, "Trend:", text_color=color.white, text_size=size.tiny)
+    trend_txt = trend_dir == 1 ? "BULLISH" : trend_dir == -1 ? "BEARISH" : "NEUTRAL"
+    trend_clr = trend_dir == 1 ? color.green : trend_dir == -1 ? color.red : color.gray
+    table.cell(info_tbl, 1, 1, trend_txt, text_color=trend_clr, text_size=size.tiny)
+
+    // آخر قمة
+    table.cell(info_tbl, 0, 2, "Swing H:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_tbl, 1, 2, str.tostring(last_swing_high, format.mintick), text_color=color_swing_high, text_size=size.tiny)
+
+    // آخر قاع
+    table.cell(info_tbl, 0, 3, "Swing L:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_tbl, 1, 3, str.tostring(last_swing_low, format.mintick), text_color=color_swing_low, text_size=size.tiny)
+
+    // مستوى اليوم السابق
+    table.cell(info_tbl, 0, 4, "Prev D H:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_tbl, 1, 4, str.tostring(prev_day_high, format.mintick), text_color=color_prev_high, text_size=size.tiny)
+
+    table.cell(info_tbl, 0, 5, "Prev D L:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_tbl, 1, 5, str.tostring(prev_day_low, format.mintick), text_color=color_prev_low, text_size=size.tiny)
+
+    // حالة التأكيد
+    table.cell(info_tbl, 0, 6, "Status:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_tbl, 1, 6, barstate.isconfirmed ? "CONFIRMED" : "PENDING",
+         text_color=barstate.isconfirmed ? color.green : color.orange, text_size=size.tiny)
+
+// ============================================================================
+// تنبيهات (Alerts)
+// ============================================================================
+
+alertcondition(is_swing_high and barstate.isconfirmed, "Swing High Confirmed", "New confirmed swing high detected")
+alertcondition(is_swing_low and barstate.isconfirmed, "Swing Low Confirmed", "New confirmed swing low detected")
+alertcondition(bull_fvg_cond, "Bullish FVG", "Bullish Fair Value Gap detected")
+alertcondition(bear_fvg_cond, "Bearish FVG", "Bearish Fair Value Gap detected")
+alertcondition(bull_ob_cond, "Bullish Order Block", "Bullish Order Block detected")
+alertcondition(bear_ob_cond, "Bearish Order Block", "Bearish Order Block detected")
