@@ -1,0 +1,600 @@
+//@version=5
+indicator("LEX-Q Harmonic Pattern Detector Pro", shorttitle="LEX-Q Harmonic", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500, max_bars_back=1000)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    LEX-Q HARMONIC PATTERN INDICATOR                          ║
+// ║                Professional Scott Carney Methodology                          ║
+// ║                        Pine Script v5 - No Repainting                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ============================================================================
+// نسب فيبوناتشي القياسية لنماذج هارمونيك (Scott Carney Ratios)
+// ============================================================================
+// Gartley:    XB=0.618, AC=0.382-0.886, BD=1.27-1.618, XD=0.786
+// Bat:        XB=0.382-0.5, AC=0.382-0.886, BD=1.618-2.618, XD=0.886
+// Butterfly:  XB=0.786, AC=0.382-0.886, BD=1.618-2.618, XD=1.27-1.618
+// Crab:       XB=0.382-0.618, AC=0.382-0.886, BD=2.618-3.618, XD=1.618
+// Deep Crab:  XB=0.886, AC=0.382-0.886, BD=2.0-3.618, XD=1.618
+// Shark:      XB=1.13-1.618, AC=1.618-2.24, XC=0.886-1.13
+// Cypher:     XB=0.382-0.618, AC=1.272-1.414, XD=0.786
+// ============================================================================
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              المدخلات (INPUTS)                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// --- إعدادات ZigZag ---
+grp_zz = "ZigZag Settings"
+zz_depth = input.int(12, "ZigZag Depth", minval=5, maxval=50, group=grp_zz, tooltip="عمق البحث عن القمم والقيعان")
+zz_deviation = input.float(5.0, "ZigZag Deviation %", minval=0.5, maxval=20.0, step=0.5, group=grp_zz, tooltip="الحد الأدنى للانحراف السعري")
+zz_confirm_bars = input.int(2, "Confirmation Bars", minval=1, maxval=10, group=grp_zz, tooltip="عدد الشموع لتأكيد النقطة المحورية")
+
+// --- إعدادات نماذج هارمونيك ---
+grp_patterns = "Harmonic Patterns"
+show_gartley = input.bool(true, "Gartley Pattern", group=grp_patterns)
+show_bat = input.bool(true, "Bat Pattern", group=grp_patterns)
+show_butterfly = input.bool(true, "Butterfly Pattern", group=grp_patterns)
+show_crab = input.bool(true, "Crab Pattern", group=grp_patterns)
+show_deep_crab = input.bool(true, "Deep Crab Pattern", group=grp_patterns)
+show_shark = input.bool(true, "Shark Pattern", group=grp_patterns)
+show_cypher = input.bool(true, "Cypher Pattern", group=grp_patterns)
+
+// --- إعدادات التسامح ---
+grp_tolerance = "Ratio Tolerance"
+fib_tolerance = input.float(0.05, "Fibonacci Tolerance", minval=0.01, maxval=0.15, step=0.01, group=grp_tolerance, tooltip="نسبة التسامح في حسابات فيبوناتشي (0.05 = 5%)")
+min_pattern_score = input.float(70.0, "Min Pattern Score %", minval=50.0, maxval=100.0, step=5.0, group=grp_tolerance, tooltip="الحد الأدنى لنقاط صحة النموذج")
+
+// --- إعدادات PRZ ---
+grp_prz = "PRZ Settings"
+show_prz = input.bool(true, "Show PRZ Zone", group=grp_prz)
+prz_extend = input.int(20, "PRZ Extend Bars", minval=5, maxval=50, group=grp_prz)
+prz_bull_color = input.color(color.new(color.green, 80), "Bullish PRZ", group=grp_prz)
+prz_bear_color = input.color(color.new(color.red, 80), "Bearish PRZ", group=grp_prz)
+
+// --- إعدادات العرض ---
+grp_display = "Display Settings"
+show_pattern_lines = input.bool(true, "Show Pattern Lines", group=grp_display)
+show_labels = input.bool(true, "Show Point Labels (X,A,B,C,D)", group=grp_display)
+show_ratios = input.bool(true, "Show Fibonacci Ratios", group=grp_display)
+show_targets = input.bool(true, "Show TP Levels", group=grp_display)
+line_width = input.int(2, "Line Width", minval=1, maxval=5, group=grp_display)
+bullish_color = input.color(color.teal, "Bullish Pattern Color", group=grp_display)
+bearish_color = input.color(color.red, "Bearish Pattern Color", group=grp_display)
+
+// --- إعدادات متقدمة ---
+grp_advanced = "Advanced Settings"
+max_patterns = input.int(3, "Max Patterns to Display", minval=1, maxval=10, group=grp_advanced)
+lookback_bars = input.int(200, "Pattern Lookback Bars", minval=50, maxval=500, group=grp_advanced)
+show_potential = input.bool(true, "Show Forming Patterns", group=grp_advanced, tooltip="إظهار النماذج قيد التشكل")
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                        ثوابت نسب فيبوناتشي (CONSTANTS)                       ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// نسب فيبوناتشي الأساسية
+FIB_0236 = 0.236
+FIB_0382 = 0.382
+FIB_0500 = 0.500
+FIB_0618 = 0.618
+FIB_0707 = 0.707
+FIB_0786 = 0.786
+FIB_0886 = 0.886
+FIB_1000 = 1.000
+FIB_1130 = 1.130
+FIB_1272 = 1.272
+FIB_1414 = 1.414
+FIB_1618 = 1.618
+FIB_2000 = 2.000
+FIB_2240 = 2.240
+FIB_2618 = 2.618
+FIB_3140 = 3.140
+FIB_3618 = 3.618
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    المتغيرات الثابتة (PERSISTENT VARIABLES)                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// مصفوفات لتخزين نقاط ZigZag
+var float[] zz_prices = array.new_float()
+var int[] zz_bars = array.new_int()
+var int[] zz_types = array.new_int()  // 1 = high, -1 = low
+
+// مصفوفات لتخزين النماذج المكتشفة
+var int[] pattern_types = array.new_int()      // نوع النموذج
+var int[] pattern_dirs = array.new_int()       // اتجاه النموذج
+var float[] pattern_scores = array.new_float() // درجة صحة النموذج
+var line[] pattern_lines = array.new_line()
+var label[] pattern_labels = array.new_label()
+var box[] pattern_boxes = array.new_box()
+
+// متغيرات التتبع
+var float last_high = na
+var float last_low = na
+var int last_high_bar = na
+var int last_low_bar = na
+var int zz_direction = 0  // 1 = up, -1 = down
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                           الدوال المساعدة (FUNCTIONS)                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// التحقق من نسبة فيبوناتشي ضمن نطاق التسامح
+f_check_ratio(float actual, float expected, float tolerance) =>
+    math.abs(actual - expected) <= tolerance
+
+// التحقق من نسبة ضمن نطاق
+f_check_ratio_range(float actual, float min_val, float max_val, float tolerance) =>
+    actual >= (min_val - tolerance) and actual <= (max_val + tolerance)
+
+// حساب نسبة التصحيح
+f_retracement(float point1, float point2, float point3) =>
+    leg1 = math.abs(point2 - point1)
+    leg2 = math.abs(point3 - point2)
+    leg1 != 0 ? leg2 / leg1 : 0.0
+
+// حساب نسبة الامتداد
+f_extension(float point1, float point2, float point3, float point4) =>
+    leg1 = math.abs(point2 - point1)
+    leg2 = math.abs(point4 - point3)
+    leg1 != 0 ? leg2 / leg1 : 0.0
+
+// حساب نسبة XD
+f_xd_ratio(float x, float a, float d) =>
+    xa = math.abs(a - x)
+    xd = math.abs(d - x)
+    xa != 0 ? xd / xa : 0.0
+
+// التحقق من صحة نموذج Gartley
+f_is_gartley(float x, float a, float b, float c, float d, float tol) =>
+    // حساب النسب
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_retracement(a, b, c)
+    bd_ratio = f_extension(a, b, c, d)
+    xd_ratio = f_xd_ratio(x, a, d)
+
+    // التحقق من نسب Gartley
+    xb_valid = f_check_ratio(xb_ratio, FIB_0618, tol)
+    ac_valid = f_check_ratio_range(ac_ratio, FIB_0382, FIB_0886, tol)
+    bd_valid = f_check_ratio_range(bd_ratio, FIB_1272, FIB_1618, tol)
+    xd_valid = f_check_ratio(xd_ratio, FIB_0786, tol)
+
+    // حساب درجة الصحة
+    score = 0.0
+    score += xb_valid ? 25.0 : (25.0 - math.abs(xb_ratio - FIB_0618) * 100)
+    score += ac_valid ? 25.0 : 15.0
+    score += bd_valid ? 25.0 : 15.0
+    score += xd_valid ? 25.0 : (25.0 - math.abs(xd_ratio - FIB_0786) * 100)
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and bd_valid and xd_valid, score, xb_ratio, ac_ratio, bd_ratio, xd_ratio]
+
+// التحقق من صحة نموذج Bat
+f_is_bat(float x, float a, float b, float c, float d, float tol) =>
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_retracement(a, b, c)
+    bd_ratio = f_extension(a, b, c, d)
+    xd_ratio = f_xd_ratio(x, a, d)
+
+    xb_valid = f_check_ratio_range(xb_ratio, FIB_0382, FIB_0500, tol)
+    ac_valid = f_check_ratio_range(ac_ratio, FIB_0382, FIB_0886, tol)
+    bd_valid = f_check_ratio_range(bd_ratio, FIB_1618, FIB_2618, tol)
+    xd_valid = f_check_ratio(xd_ratio, FIB_0886, tol)
+
+    score = 0.0
+    score += xb_valid ? 25.0 : 15.0
+    score += ac_valid ? 25.0 : 15.0
+    score += bd_valid ? 25.0 : 15.0
+    score += xd_valid ? 25.0 : (25.0 - math.abs(xd_ratio - FIB_0886) * 100)
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and bd_valid and xd_valid, score, xb_ratio, ac_ratio, bd_ratio, xd_ratio]
+
+// التحقق من صحة نموذج Butterfly
+f_is_butterfly(float x, float a, float b, float c, float d, float tol) =>
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_retracement(a, b, c)
+    bd_ratio = f_extension(a, b, c, d)
+    xd_ratio = f_xd_ratio(x, a, d)
+
+    xb_valid = f_check_ratio(xb_ratio, FIB_0786, tol)
+    ac_valid = f_check_ratio_range(ac_ratio, FIB_0382, FIB_0886, tol)
+    bd_valid = f_check_ratio_range(bd_ratio, FIB_1618, FIB_2618, tol)
+    xd_valid = f_check_ratio_range(xd_ratio, FIB_1272, FIB_1618, tol + 0.05)
+
+    score = 0.0
+    score += xb_valid ? 25.0 : (25.0 - math.abs(xb_ratio - FIB_0786) * 100)
+    score += ac_valid ? 25.0 : 15.0
+    score += bd_valid ? 25.0 : 15.0
+    score += xd_valid ? 25.0 : 15.0
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and bd_valid and xd_valid, score, xb_ratio, ac_ratio, bd_ratio, xd_ratio]
+
+// التحقق من صحة نموذج Crab
+f_is_crab(float x, float a, float b, float c, float d, float tol) =>
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_retracement(a, b, c)
+    bd_ratio = f_extension(a, b, c, d)
+    xd_ratio = f_xd_ratio(x, a, d)
+
+    xb_valid = f_check_ratio_range(xb_ratio, FIB_0382, FIB_0618, tol)
+    ac_valid = f_check_ratio_range(ac_ratio, FIB_0382, FIB_0886, tol)
+    bd_valid = f_check_ratio_range(bd_ratio, FIB_2618, FIB_3618, tol + 0.1)
+    xd_valid = f_check_ratio(xd_ratio, FIB_1618, tol + 0.05)
+
+    score = 0.0
+    score += xb_valid ? 25.0 : 15.0
+    score += ac_valid ? 25.0 : 15.0
+    score += bd_valid ? 25.0 : 15.0
+    score += xd_valid ? 25.0 : (25.0 - math.abs(xd_ratio - FIB_1618) * 50)
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and bd_valid and xd_valid, score, xb_ratio, ac_ratio, bd_ratio, xd_ratio]
+
+// التحقق من صحة نموذج Deep Crab
+f_is_deep_crab(float x, float a, float b, float c, float d, float tol) =>
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_retracement(a, b, c)
+    bd_ratio = f_extension(a, b, c, d)
+    xd_ratio = f_xd_ratio(x, a, d)
+
+    xb_valid = f_check_ratio(xb_ratio, FIB_0886, tol)
+    ac_valid = f_check_ratio_range(ac_ratio, FIB_0382, FIB_0886, tol)
+    bd_valid = f_check_ratio_range(bd_ratio, FIB_2000, FIB_3618, tol + 0.15)
+    xd_valid = f_check_ratio(xd_ratio, FIB_1618, tol + 0.05)
+
+    score = 0.0
+    score += xb_valid ? 25.0 : (25.0 - math.abs(xb_ratio - FIB_0886) * 100)
+    score += ac_valid ? 25.0 : 15.0
+    score += bd_valid ? 25.0 : 15.0
+    score += xd_valid ? 25.0 : (25.0 - math.abs(xd_ratio - FIB_1618) * 50)
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and bd_valid and xd_valid, score, xb_ratio, ac_ratio, bd_ratio, xd_ratio]
+
+// التحقق من صحة نموذج Shark
+f_is_shark(float x, float a, float b, float c, float d, float tol) =>
+    // Shark pattern uses different structure: 0-X-A-B-C where C is PRZ
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_extension(x, a, a, c)  // Extension from XA
+    xd_ratio = f_xd_ratio(x, a, d)
+
+    xb_valid = f_check_ratio_range(xb_ratio, FIB_1130, FIB_1618, tol + 0.05)
+    ac_valid = f_check_ratio_range(ac_ratio, FIB_1618, FIB_2240, tol + 0.1)
+    xd_valid = f_check_ratio_range(xd_ratio, FIB_0886, FIB_1130, tol)
+
+    score = 0.0
+    score += xb_valid ? 33.0 : 20.0
+    score += ac_valid ? 33.0 : 20.0
+    score += xd_valid ? 34.0 : 20.0
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and xd_valid, score, xb_ratio, ac_ratio, 0.0, xd_ratio]
+
+// التحقق من صحة نموذج Cypher
+f_is_cypher(float x, float a, float b, float c, float d, float tol) =>
+    xb_ratio = f_retracement(x, a, b)
+    ac_ratio = f_extension(x, a, a, c)  // BC is extension of XA
+    xc_ratio = f_xd_ratio(x, a, c)
+    xd_ratio = f_xd_ratio(x, c, d)  // XD is retracement of XC
+
+    xb_valid = f_check_ratio_range(xb_ratio, FIB_0382, FIB_0618, tol)
+    ac_valid = f_check_ratio_range(xc_ratio, FIB_1272, FIB_1414, tol)
+    xd_valid = f_check_ratio(xd_ratio, FIB_0786, tol)
+
+    score = 0.0
+    score += xb_valid ? 33.0 : 20.0
+    score += ac_valid ? 33.0 : 20.0
+    score += xd_valid ? 34.0 : (34.0 - math.abs(xd_ratio - FIB_0786) * 100)
+    score := math.max(0, math.min(100, score))
+
+    [xb_valid and ac_valid and xd_valid, score, xb_ratio, xc_ratio, 0.0, xd_ratio]
+
+// الحصول على اسم النموذج
+f_get_pattern_name(int pattern_id) =>
+    switch pattern_id
+        1 => "Gartley"
+        2 => "Bat"
+        3 => "Butterfly"
+        4 => "Crab"
+        5 => "Deep Crab"
+        6 => "Shark"
+        7 => "Cypher"
+        => "Unknown"
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          خوارزمية ZigZag المتقدمة                            ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// حساب الانحراف الديناميكي
+atr_val = ta.atr(14)
+dynamic_dev = math.max(zz_deviation / 100 * close, atr_val * 0.5)
+
+// البحث عن القمم والقيعان
+pivot_high_val = ta.pivothigh(high, zz_depth, zz_confirm_bars)
+pivot_low_val = ta.pivotlow(low, zz_depth, zz_confirm_bars)
+
+// متغيرات محلية للتتبع
+var bool new_pivot_added = false
+
+// تحديث ZigZag عند إغلاق الشمعة فقط (No Repainting)
+if barstate.isconfirmed
+    new_pivot_added := false
+
+    // معالجة القمة الجديدة
+    if not na(pivot_high_val)
+        pivot_bar = bar_index - zz_confirm_bars
+
+        if array.size(zz_prices) == 0
+            array.push(zz_prices, pivot_high_val)
+            array.push(zz_bars, pivot_bar)
+            array.push(zz_types, 1)
+            zz_direction := 1
+            new_pivot_added := true
+        else
+            last_type = array.get(zz_types, array.size(zz_types) - 1)
+            last_price = array.get(zz_prices, array.size(zz_prices) - 1)
+
+            if last_type == 1
+                // تحديث القمة إذا كانت أعلى
+                if pivot_high_val > last_price
+                    array.set(zz_prices, array.size(zz_prices) - 1, pivot_high_val)
+                    array.set(zz_bars, array.size(zz_bars) - 1, pivot_bar)
+                    new_pivot_added := true
+            else
+                // إضافة قمة جديدة بعد قاع
+                price_change = math.abs(pivot_high_val - last_price)
+                if price_change >= dynamic_dev
+                    array.push(zz_prices, pivot_high_val)
+                    array.push(zz_bars, pivot_bar)
+                    array.push(zz_types, 1)
+                    zz_direction := 1
+                    new_pivot_added := true
+
+        last_high := pivot_high_val
+        last_high_bar := pivot_bar
+
+    // معالجة القاع الجديد
+    if not na(pivot_low_val)
+        pivot_bar = bar_index - zz_confirm_bars
+
+        if array.size(zz_prices) == 0
+            array.push(zz_prices, pivot_low_val)
+            array.push(zz_bars, pivot_bar)
+            array.push(zz_types, -1)
+            zz_direction := -1
+            new_pivot_added := true
+        else
+            last_type = array.get(zz_types, array.size(zz_types) - 1)
+            last_price = array.get(zz_prices, array.size(zz_prices) - 1)
+
+            if last_type == -1
+                // تحديث القاع إذا كان أدنى
+                if pivot_low_val < last_price
+                    array.set(zz_prices, array.size(zz_prices) - 1, pivot_low_val)
+                    array.set(zz_bars, array.size(zz_bars) - 1, pivot_bar)
+                    new_pivot_added := true
+            else
+                // إضافة قاع جديد بعد قمة
+                price_change = math.abs(pivot_low_val - last_price)
+                if price_change >= dynamic_dev
+                    array.push(zz_prices, pivot_low_val)
+                    array.push(zz_bars, pivot_bar)
+                    array.push(zz_types, -1)
+                    zz_direction := -1
+                    new_pivot_added := true
+
+        last_low := pivot_low_val
+        last_low_bar := pivot_bar
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                         كشف نماذج هارمونيك                                   ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// دالة لرسم نموذج هارمونيك
+f_draw_harmonic(int x_bar, float x_price, int a_bar, float a_price, int b_bar, float b_price, int c_bar, float c_price, int d_bar, float d_price, int direction, string pattern_name, float score, color pattern_color) =>
+    if show_pattern_lines
+        // رسم خطوط النموذج XA, AB, BC, CD
+        line.new(x_bar, x_price, a_bar, a_price, color=pattern_color, width=line_width, style=line.style_solid)
+        line.new(a_bar, a_price, b_bar, b_price, color=pattern_color, width=line_width, style=line.style_solid)
+        line.new(b_bar, b_price, c_bar, c_price, color=pattern_color, width=line_width, style=line.style_solid)
+        line.new(c_bar, c_price, d_bar, d_price, color=pattern_color, width=line_width, style=line.style_solid)
+
+        // خطوط الربط XB, BD, AC, XD (متقطعة)
+        line.new(x_bar, x_price, b_bar, b_price, color=color.new(pattern_color, 50), width=1, style=line.style_dashed)
+        line.new(a_bar, a_price, c_bar, c_price, color=color.new(pattern_color, 50), width=1, style=line.style_dashed)
+        line.new(x_bar, x_price, d_bar, d_price, color=color.new(pattern_color, 50), width=1, style=line.style_dotted)
+
+    if show_labels
+        // تسميات النقاط
+        label.new(x_bar, x_price, "X", color=color.new(pattern_color, 70), textcolor=color.white, style=direction == 1 ? label.style_label_up : label.style_label_down, size=size.small)
+        label.new(a_bar, a_price, "A", color=color.new(pattern_color, 70), textcolor=color.white, style=direction == 1 ? label.style_label_down : label.style_label_up, size=size.small)
+        label.new(b_bar, b_price, "B", color=color.new(pattern_color, 70), textcolor=color.white, style=direction == 1 ? label.style_label_up : label.style_label_down, size=size.small)
+        label.new(c_bar, c_price, "C", color=color.new(pattern_color, 70), textcolor=color.white, style=direction == 1 ? label.style_label_down : label.style_label_up, size=size.small)
+        label.new(d_bar, d_price, "D\n" + pattern_name + "\n" + str.tostring(score, "#.#") + "%", color=color.new(pattern_color, 30), textcolor=color.white, style=direction == 1 ? label.style_label_up : label.style_label_down, size=size.normal)
+
+    // رسم منطقة PRZ
+    if show_prz
+        prz_size = math.abs(a_price - x_price) * 0.1
+        prz_top = direction == 1 ? d_price + prz_size : d_price + prz_size
+        prz_bottom = direction == 1 ? d_price - prz_size : d_price - prz_size
+        box.new(d_bar, prz_top, d_bar + prz_extend, prz_bottom, bgcolor=direction == 1 ? prz_bull_color : prz_bear_color, border_color=pattern_color, border_width=1)
+
+    // رسم مستويات الأهداف
+    if show_targets
+        xa_range = math.abs(a_price - x_price)
+        tp1 = direction == 1 ? d_price + xa_range * 0.382 : d_price - xa_range * 0.382
+        tp2 = direction == 1 ? d_price + xa_range * 0.618 : d_price - xa_range * 0.618
+        tp3 = direction == 1 ? d_price + xa_range * 1.0 : d_price - xa_range * 1.0
+
+        line.new(d_bar, tp1, d_bar + prz_extend, tp1, color=color.new(color.green, 50), width=1, style=line.style_dotted)
+        line.new(d_bar, tp2, d_bar + prz_extend, tp2, color=color.new(color.green, 40), width=1, style=line.style_dotted)
+        line.new(d_bar, tp3, d_bar + prz_extend, tp3, color=color.new(color.green, 30), width=1, style=line.style_dotted)
+
+        label.new(d_bar + prz_extend, tp1, "TP1: " + str.tostring(tp1, format.mintick), color=color.new(color.green, 80), textcolor=color.green, style=label.style_label_left, size=size.tiny)
+        label.new(d_bar + prz_extend, tp2, "TP2: " + str.tostring(tp2, format.mintick), color=color.new(color.green, 80), textcolor=color.green, style=label.style_label_left, size=size.tiny)
+
+// البحث عن نماذج هارمونيك مكتملة
+var int patterns_found = 0
+var bool pattern_alert_triggered = false
+
+if barstate.isconfirmed and array.size(zz_prices) >= 5 and new_pivot_added
+    // الحصول على آخر 5 نقاط
+    size = array.size(zz_prices)
+
+    x_price = array.get(zz_prices, size - 5)
+    x_bar = array.get(zz_bars, size - 5)
+    x_type = array.get(zz_types, size - 5)
+
+    a_price = array.get(zz_prices, size - 4)
+    a_bar = array.get(zz_bars, size - 4)
+
+    b_price = array.get(zz_prices, size - 3)
+    b_bar = array.get(zz_bars, size - 3)
+
+    c_price = array.get(zz_prices, size - 2)
+    c_bar = array.get(zz_bars, size - 2)
+
+    d_price = array.get(zz_prices, size - 1)
+    d_bar = array.get(zz_bars, size - 1)
+    d_type = array.get(zz_types, size - 1)
+
+    // تحديد اتجاه النموذج
+    pattern_direction = d_type == -1 ? 1 : -1  // bullish if D is low, bearish if D is high
+
+    // التحقق من النماذج
+    pattern_found_name = ""
+    pattern_found_score = 0.0
+    pattern_found_id = 0
+
+    // التحقق من Gartley
+    if show_gartley
+        [is_gartley, gartley_score, xb, ac, bd, xd] = f_is_gartley(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_gartley and gartley_score >= min_pattern_score
+            pattern_found_name := "Gartley"
+            pattern_found_score := gartley_score
+            pattern_found_id := 1
+
+    // التحقق من Bat
+    if show_bat and pattern_found_id == 0
+        [is_bat, bat_score, xb, ac, bd, xd] = f_is_bat(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_bat and bat_score >= min_pattern_score
+            pattern_found_name := "Bat"
+            pattern_found_score := bat_score
+            pattern_found_id := 2
+
+    // التحقق من Butterfly
+    if show_butterfly and pattern_found_id == 0
+        [is_butterfly, butterfly_score, xb, ac, bd, xd] = f_is_butterfly(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_butterfly and butterfly_score >= min_pattern_score
+            pattern_found_name := "Butterfly"
+            pattern_found_score := butterfly_score
+            pattern_found_id := 3
+
+    // التحقق من Crab
+    if show_crab and pattern_found_id == 0
+        [is_crab, crab_score, xb, ac, bd, xd] = f_is_crab(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_crab and crab_score >= min_pattern_score
+            pattern_found_name := "Crab"
+            pattern_found_score := crab_score
+            pattern_found_id := 4
+
+    // التحقق من Deep Crab
+    if show_deep_crab and pattern_found_id == 0
+        [is_deep_crab, deep_crab_score, xb, ac, bd, xd] = f_is_deep_crab(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_deep_crab and deep_crab_score >= min_pattern_score
+            pattern_found_name := "Deep Crab"
+            pattern_found_score := deep_crab_score
+            pattern_found_id := 5
+
+    // التحقق من Shark
+    if show_shark and pattern_found_id == 0
+        [is_shark, shark_score, xb, ac, bd, xd] = f_is_shark(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_shark and shark_score >= min_pattern_score
+            pattern_found_name := "Shark"
+            pattern_found_score := shark_score
+            pattern_found_id := 6
+
+    // التحقق من Cypher
+    if show_cypher and pattern_found_id == 0
+        [is_cypher, cypher_score, xb, ac, bd, xd] = f_is_cypher(x_price, a_price, b_price, c_price, d_price, fib_tolerance)
+        if is_cypher and cypher_score >= min_pattern_score
+            pattern_found_name := "Cypher"
+            pattern_found_score := cypher_score
+            pattern_found_id := 7
+
+    // رسم النموذج إذا تم العثور عليه
+    if pattern_found_id > 0 and patterns_found < max_patterns
+        pattern_color = pattern_direction == 1 ? bullish_color : bearish_color
+        f_draw_harmonic(x_bar, x_price, a_bar, a_price, b_bar, b_price, c_bar, c_price, d_bar, d_price, pattern_direction, pattern_found_name, pattern_found_score, pattern_color)
+        patterns_found += 1
+        pattern_alert_triggered := true
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                            جدول المعلومات                                    ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var table info_panel = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.gray)
+
+if barstate.islast
+    // العنوان
+    table.cell(info_panel, 0, 0, "LEX-Q HARMONIC", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.purple, 50))
+    table.cell(info_panel, 1, 0, "PRO v1.0", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.purple, 50))
+
+    // إحصائيات ZigZag
+    table.cell(info_panel, 0, 1, "ZZ Points:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_panel, 1, 1, str.tostring(array.size(zz_prices)), text_color=color.aqua, text_size=size.tiny)
+
+    // عدد النماذج
+    table.cell(info_panel, 0, 2, "Patterns:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_panel, 1, 2, str.tostring(patterns_found), text_color=color.lime, text_size=size.tiny)
+
+    // إعدادات
+    table.cell(info_panel, 0, 3, "Depth:", text_color=color.gray, text_size=size.tiny)
+    table.cell(info_panel, 1, 3, str.tostring(zz_depth), text_color=color.gray, text_size=size.tiny)
+
+    table.cell(info_panel, 0, 4, "Tolerance:", text_color=color.gray, text_size=size.tiny)
+    table.cell(info_panel, 1, 4, str.tostring(fib_tolerance * 100, "#.#") + "%", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(info_panel, 0, 5, "Min Score:", text_color=color.gray, text_size=size.tiny)
+    table.cell(info_panel, 1, 5, str.tostring(min_pattern_score, "#.#") + "%", text_color=color.gray, text_size=size.tiny)
+
+    // الاتجاه الحالي
+    table.cell(info_panel, 0, 6, "ZZ Dir:", text_color=color.white, text_size=size.tiny)
+    dir_txt = zz_direction == 1 ? "UP" : zz_direction == -1 ? "DOWN" : "FLAT"
+    dir_clr = zz_direction == 1 ? color.green : zz_direction == -1 ? color.red : color.gray
+    table.cell(info_panel, 1, 6, dir_txt, text_color=dir_clr, text_size=size.tiny)
+
+    // آخر سعر
+    table.cell(info_panel, 0, 7, "Last High:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_panel, 1, 7, str.tostring(nz(last_high, 0), format.mintick), text_color=color.red, text_size=size.tiny)
+
+    table.cell(info_panel, 0, 8, "Last Low:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_panel, 1, 8, str.tostring(nz(last_low, 0), format.mintick), text_color=color.green, text_size=size.tiny)
+
+    // حالة التأكيد
+    table.cell(info_panel, 0, 9, "Status:", text_color=color.white, text_size=size.tiny)
+    table.cell(info_panel, 1, 9, barstate.isconfirmed ? "CONFIRMED" : "PENDING", text_color=barstate.isconfirmed ? color.green : color.orange, text_size=size.tiny)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              المخرجات البصرية                                ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// رسم خطوط ZigZag
+plot(last_high, "Last ZZ High", color=color.new(color.red, 70), style=plot.style_linebr, linewidth=1)
+plot(last_low, "Last ZZ Low", color=color.new(color.green, 70), style=plot.style_linebr, linewidth=1)
+
+// إشارات البيع والشراء
+plotshape(pattern_alert_triggered and zz_direction == -1, "Bullish Pattern Signal", shape.triangleup, location.belowbar, bullish_color, size=size.small)
+plotshape(pattern_alert_triggered and zz_direction == 1, "Bearish Pattern Signal", shape.triangledown, location.abovebar, bearish_color, size=size.small)
+
+// خلفية تنبيه النموذج
+bgcolor(pattern_alert_triggered ? color.new(color.purple, 95) : na, title="Pattern Alert Background")
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                               التنبيهات                                      ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+alertcondition(pattern_alert_triggered and zz_direction == -1, "Bullish Harmonic Pattern", "Bullish Harmonic Pattern detected at {{close}}")
+alertcondition(pattern_alert_triggered and zz_direction == 1, "Bearish Harmonic Pattern", "Bearish Harmonic Pattern detected at {{close}}")
+alertcondition(pattern_alert_triggered, "Any Harmonic Pattern", "Harmonic Pattern detected at {{close}}")

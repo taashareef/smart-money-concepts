@@ -1,0 +1,702 @@
+//@version=5
+indicator("LEX-Q Harmonic PRZ Predictor", shorttitle="LEX-Q PRZ", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500, max_bars_back=1000)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║              LEX-Q HARMONIC PRZ PREDICTOR - النسخة الاستباقية                ║
+// ║          Advanced Pattern Completion Zone Prediction System                   ║
+// ║                    Pine Script v5 - Zero Repainting                          ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ============================================================================
+// هذا المؤشر يقوم بـ:
+// 1. كشف نماذج هارمونيك المكتملة
+// 2. التنبؤ بمناطق اكتمال النماذج قيد التشكل (PRZ Prediction)
+// 3. حساب نقاط الدخول والخروج المثالية
+// 4. تقييم جودة كل نموذج بناءً على دقة النسب
+// ============================================================================
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              المدخلات (INPUTS)                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// --- ZigZag Settings ---
+grp_zz = "ZigZag Configuration"
+i_zz_depth = input.int(10, "Pivot Depth", minval=3, maxval=50, group=grp_zz)
+i_zz_confirm = input.int(2, "Confirmation Bars", minval=1, maxval=10, group=grp_zz)
+i_min_swing = input.float(0.5, "Min Swing %", minval=0.1, maxval=10.0, step=0.1, group=grp_zz)
+
+// --- Pattern Settings ---
+grp_pat = "Pattern Detection"
+i_tolerance = input.float(0.08, "Fib Tolerance", minval=0.01, maxval=0.20, step=0.01, group=grp_pat)
+i_min_score = input.float(65.0, "Min Pattern Score", minval=40.0, maxval=100.0, step=5.0, group=grp_pat)
+i_show_forming = input.bool(true, "Show Forming Patterns", group=grp_pat)
+
+// --- Pattern Selection ---
+grp_sel = "Active Patterns"
+i_gartley = input.bool(true, "Gartley", inline="p1", group=grp_sel)
+i_bat = input.bool(true, "Bat", inline="p1", group=grp_sel)
+i_butterfly = input.bool(true, "Butterfly", inline="p2", group=grp_sel)
+i_crab = input.bool(true, "Crab", inline="p2", group=grp_sel)
+i_shark = input.bool(true, "Shark", inline="p3", group=grp_sel)
+i_cypher = input.bool(true, "Cypher", inline="p3", group=grp_sel)
+i_abcd = input.bool(true, "ABCD", inline="p3", group=grp_sel)
+
+// --- PRZ Settings ---
+grp_prz = "PRZ Zone Settings"
+i_show_prz = input.bool(true, "Show PRZ Zones", group=grp_prz)
+i_prz_width = input.float(2.0, "PRZ Width %", minval=0.5, maxval=10.0, step=0.5, group=grp_prz)
+i_prz_extend = input.int(30, "PRZ Extend Bars", minval=5, maxval=100, group=grp_prz)
+
+// --- Visual Settings ---
+grp_vis = "Visual Settings"
+i_show_lines = input.bool(true, "Pattern Lines", group=grp_vis)
+i_show_labels = input.bool(true, "Point Labels", group=grp_vis)
+i_show_ratios = input.bool(true, "Fib Ratios", group=grp_vis)
+i_show_targets = input.bool(true, "TP/SL Levels", group=grp_vis)
+i_line_width = input.int(2, "Line Width", minval=1, maxval=5, group=grp_vis)
+i_bull_color = input.color(color.teal, "Bullish Color", group=grp_vis)
+i_bear_color = input.color(color.red, "Bearish Color", group=grp_vis)
+i_forming_color = input.color(color.orange, "Forming Pattern", group=grp_vis)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                        نسب فيبوناتشي الثابتة                                 ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+F_236 = 0.236
+F_382 = 0.382
+F_500 = 0.500
+F_618 = 0.618
+F_707 = 0.707
+F_786 = 0.786
+F_886 = 0.886
+F_1000 = 1.000
+F_1128 = 1.128
+F_1272 = 1.272
+F_1414 = 1.414
+F_1618 = 1.618
+F_2000 = 2.000
+F_2240 = 2.240
+F_2618 = 2.618
+F_3618 = 3.618
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                     أنواع النماذج ونسبها المرجعية                            ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// Pattern Type IDs
+GARTLEY = 1
+BAT = 2
+BUTTERFLY = 3
+CRAB = 4
+SHARK = 5
+CYPHER = 6
+ABCD = 7
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    المتغيرات الثابتة (var declarations)                      ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ZigZag Arrays
+var float[] zz_price = array.new_float()
+var int[] zz_bar = array.new_int()
+var int[] zz_dir = array.new_int()  // 1=high, -1=low
+
+// Pattern tracking
+var int last_pattern_bar = 0
+var string last_pattern_name = ""
+var float last_pattern_score = 0.0
+
+// Drawing arrays for cleanup
+var line[] drawn_lines = array.new_line()
+var label[] drawn_labels = array.new_label()
+var box[] drawn_boxes = array.new_box()
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                           دوال الحساب الأساسية                               ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// حساب نسبة التصحيح
+f_retrace(float p1, float p2, float p3) =>
+    range1 = math.abs(p2 - p1)
+    range2 = math.abs(p3 - p2)
+    range1 > 0 ? range2 / range1 : 0.0
+
+// حساب نسبة الامتداد من نقطتين
+f_extend(float p1, float p2, float p3, float p4) =>
+    range1 = math.abs(p2 - p1)
+    range2 = math.abs(p4 - p3)
+    range1 > 0 ? range2 / range1 : 0.0
+
+// التحقق من نسبة في نطاق
+f_in_range(float val, float min_v, float max_v, float tol) =>
+    val >= (min_v - tol) and val <= (max_v + tol)
+
+// التحقق من نسبة محددة
+f_is_ratio(float val, float target, float tol) =>
+    math.abs(val - target) <= tol
+
+// حساب درجة الدقة للنسبة
+f_ratio_score(float actual, float ideal) =>
+    diff = math.abs(actual - ideal)
+    math.max(0, 100 - diff * 200)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    دوال حساب PRZ المتوقعة لكل نموذج                          ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// حساب PRZ لنموذج Gartley (XD = 0.786)
+f_prz_gartley(float x, float a, int direction) =>
+    xa = math.abs(a - x)
+    prz_ideal = direction == 1 ? x + xa * F_786 : x - xa * F_786
+    prz_min = direction == 1 ? x + xa * (F_786 - 0.03) : x - xa * (F_786 + 0.03)
+    prz_max = direction == 1 ? x + xa * (F_786 + 0.03) : x - xa * (F_786 - 0.03)
+    [prz_ideal, prz_min, prz_max]
+
+// حساب PRZ لنموذج Bat (XD = 0.886)
+f_prz_bat(float x, float a, int direction) =>
+    xa = math.abs(a - x)
+    prz_ideal = direction == 1 ? x + xa * F_886 : x - xa * F_886
+    prz_min = direction == 1 ? x + xa * (F_886 - 0.03) : x - xa * (F_886 + 0.03)
+    prz_max = direction == 1 ? x + xa * (F_886 + 0.03) : x - xa * (F_886 - 0.03)
+    [prz_ideal, prz_min, prz_max]
+
+// حساب PRZ لنموذج Butterfly (XD = 1.27-1.618)
+f_prz_butterfly(float x, float a, int direction) =>
+    xa = math.abs(a - x)
+    prz_ideal = direction == 1 ? x + xa * F_1272 : x - xa * F_1272
+    prz_min = direction == 1 ? x + xa * F_1272 : x - xa * F_1618
+    prz_max = direction == 1 ? x + xa * F_1618 : x - xa * F_1272
+    [prz_ideal, prz_min, prz_max]
+
+// حساب PRZ لنموذج Crab (XD = 1.618)
+f_prz_crab(float x, float a, int direction) =>
+    xa = math.abs(a - x)
+    prz_ideal = direction == 1 ? x + xa * F_1618 : x - xa * F_1618
+    prz_min = direction == 1 ? x + xa * (F_1618 - 0.05) : x - xa * (F_1618 + 0.05)
+    prz_max = direction == 1 ? x + xa * (F_1618 + 0.05) : x - xa * (F_1618 - 0.05)
+    [prz_ideal, prz_min, prz_max]
+
+// حساب PRZ لنموذج Cypher (XD = 0.786 من XC)
+f_prz_cypher(float x, float c, int direction) =>
+    xc = math.abs(c - x)
+    prz_ideal = direction == 1 ? c - xc * F_786 : c + xc * F_786
+    prz_min = direction == 1 ? c - xc * (F_786 + 0.03) : c + xc * (F_786 - 0.03)
+    prz_max = direction == 1 ? c - xc * (F_786 - 0.03) : c + xc * (F_786 + 0.03)
+    [prz_ideal, prz_min, prz_max]
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                      دوال التحقق من النماذج المكتملة                         ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// Gartley Pattern Validation
+f_validate_gartley(float x, float a, float b, float c, float d, float tol) =>
+    xb = f_retrace(x, a, b)
+    ac = f_retrace(a, b, c)
+    bd = f_extend(a, b, c, d)
+    xd = f_retrace(x, a, d)
+
+    xb_ok = f_is_ratio(xb, F_618, tol)
+    ac_ok = f_in_range(ac, F_382, F_886, tol)
+    bd_ok = f_in_range(bd, F_1272, F_1618, tol)
+    xd_ok = f_is_ratio(xd, F_786, tol)
+
+    score = (f_ratio_score(xb, F_618) + f_ratio_score(xd, F_786)) / 2
+    valid = xb_ok and ac_ok and bd_ok and xd_ok
+
+    [valid, score, xb, ac, bd, xd]
+
+// Bat Pattern Validation
+f_validate_bat(float x, float a, float b, float c, float d, float tol) =>
+    xb = f_retrace(x, a, b)
+    ac = f_retrace(a, b, c)
+    bd = f_extend(a, b, c, d)
+    xd = f_retrace(x, a, d)
+
+    xb_ok = f_in_range(xb, F_382, F_500, tol)
+    ac_ok = f_in_range(ac, F_382, F_886, tol)
+    bd_ok = f_in_range(bd, F_1618, F_2618, tol)
+    xd_ok = f_is_ratio(xd, F_886, tol)
+
+    score = (f_ratio_score(xd, F_886) * 2 + f_ratio_score(xb, F_500)) / 3
+    valid = xb_ok and ac_ok and bd_ok and xd_ok
+
+    [valid, score, xb, ac, bd, xd]
+
+// Butterfly Pattern Validation
+f_validate_butterfly(float x, float a, float b, float c, float d, float tol) =>
+    xb = f_retrace(x, a, b)
+    ac = f_retrace(a, b, c)
+    bd = f_extend(a, b, c, d)
+    xd = f_retrace(x, a, d)
+
+    xb_ok = f_is_ratio(xb, F_786, tol)
+    ac_ok = f_in_range(ac, F_382, F_886, tol)
+    bd_ok = f_in_range(bd, F_1618, F_2618, tol)
+    xd_ok = f_in_range(xd, F_1272, F_1618, tol + 0.05)
+
+    score = (f_ratio_score(xb, F_786) + f_ratio_score(xd, F_1272)) / 2
+    valid = xb_ok and ac_ok and bd_ok and xd_ok
+
+    [valid, score, xb, ac, bd, xd]
+
+// Crab Pattern Validation
+f_validate_crab(float x, float a, float b, float c, float d, float tol) =>
+    xb = f_retrace(x, a, b)
+    ac = f_retrace(a, b, c)
+    bd = f_extend(a, b, c, d)
+    xd = f_retrace(x, a, d)
+
+    xb_ok = f_in_range(xb, F_382, F_618, tol)
+    ac_ok = f_in_range(ac, F_382, F_886, tol)
+    bd_ok = f_in_range(bd, F_2618, F_3618, tol + 0.1)
+    xd_ok = f_is_ratio(xd, F_1618, tol + 0.05)
+
+    score = (f_ratio_score(xd, F_1618) * 2 + f_ratio_score(xb, F_500)) / 3
+    valid = xb_ok and ac_ok and bd_ok and xd_ok
+
+    [valid, score, xb, ac, bd, xd]
+
+// Shark Pattern Validation
+f_validate_shark(float x, float a, float b, float c, float d, float tol) =>
+    xb = f_retrace(x, a, b)
+    bc_ext = f_extend(x, a, b, c)
+    xd = f_retrace(x, a, d)
+
+    xb_ok = f_in_range(xb, F_1128, F_1618, tol + 0.05)
+    bc_ok = f_in_range(bc_ext, F_1618, F_2240, tol + 0.1)
+    xd_ok = f_in_range(xd, F_886, F_1128, tol)
+
+    score = (f_ratio_score(xd, F_886) + f_ratio_score(xb, F_1272)) / 2
+    valid = xb_ok and bc_ok and xd_ok
+
+    [valid, score, xb, bc_ext, 0.0, xd]
+
+// Cypher Pattern Validation
+f_validate_cypher(float x, float a, float b, float c, float d, float tol) =>
+    xb = f_retrace(x, a, b)
+    xc = f_retrace(x, a, c)
+    cd = f_retrace(x, c, d)
+
+    xb_ok = f_in_range(xb, F_382, F_618, tol)
+    xc_ok = f_in_range(xc, F_1272, F_1414, tol)
+    cd_ok = f_is_ratio(cd, F_786, tol)
+
+    score = (f_ratio_score(cd, F_786) * 2 + f_ratio_score(xc, F_1272)) / 3
+    valid = xb_ok and xc_ok and cd_ok
+
+    [valid, score, xb, xc, 0.0, cd]
+
+// ABCD Pattern Validation
+f_validate_abcd(float a, float b, float c, float d, float tol) =>
+    ab = math.abs(b - a)
+    cd = math.abs(d - c)
+    bc = f_retrace(a, b, c)
+
+    ratio = ab > 0 ? cd / ab : 0.0
+    bc_ok = f_in_range(bc, F_382, F_886, tol)
+    cd_ok = f_in_range(ratio, F_1000, F_1618, tol + 0.1)
+
+    score = f_ratio_score(ratio, F_1272)
+    valid = bc_ok and cd_ok
+
+    [valid, score, 0.0, bc, ratio, ratio]
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          خوارزمية ZigZag المتقدمة                            ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// حساب القمم والقيعان
+ph = ta.pivothigh(high, i_zz_depth, i_zz_confirm)
+pl = ta.pivotlow(low, i_zz_depth, i_zz_confirm)
+
+// الحد الأدنى للتأرجح
+min_swing_val = close * i_min_swing / 100
+
+// تحديث ZigZag
+if barstate.isconfirmed
+    // معالجة قمة جديدة
+    if not na(ph)
+        pivot_bar = bar_index - i_zz_confirm
+        pivot_price = ph
+
+        if array.size(zz_price) == 0
+            array.push(zz_price, pivot_price)
+            array.push(zz_bar, pivot_bar)
+            array.push(zz_dir, 1)
+        else
+            last_dir = array.get(zz_dir, array.size(zz_dir) - 1)
+            last_p = array.get(zz_price, array.size(zz_price) - 1)
+
+            if last_dir == 1
+                if pivot_price > last_p
+                    array.set(zz_price, array.size(zz_price) - 1, pivot_price)
+                    array.set(zz_bar, array.size(zz_bar) - 1, pivot_bar)
+            else
+                if math.abs(pivot_price - last_p) >= min_swing_val
+                    array.push(zz_price, pivot_price)
+                    array.push(zz_bar, pivot_bar)
+                    array.push(zz_dir, 1)
+
+    // معالجة قاع جديد
+    if not na(pl)
+        pivot_bar = bar_index - i_zz_confirm
+        pivot_price = pl
+
+        if array.size(zz_price) == 0
+            array.push(zz_price, pivot_price)
+            array.push(zz_bar, pivot_bar)
+            array.push(zz_dir, -1)
+        else
+            last_dir = array.get(zz_dir, array.size(zz_dir) - 1)
+            last_p = array.get(zz_price, array.size(zz_price) - 1)
+
+            if last_dir == -1
+                if pivot_price < last_p
+                    array.set(zz_price, array.size(zz_price) - 1, pivot_price)
+                    array.set(zz_bar, array.size(zz_bar) - 1, pivot_bar)
+            else
+                if math.abs(pivot_price - last_p) >= min_swing_val
+                    array.push(zz_price, pivot_price)
+                    array.push(zz_bar, pivot_bar)
+                    array.push(zz_dir, -1)
+
+    // تنظيف المصفوفات القديمة
+    while array.size(zz_price) > 20
+        array.shift(zz_price)
+        array.shift(zz_bar)
+        array.shift(zz_dir)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                         دالة رسم النموذج الكامل                              ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+f_draw_pattern(int xb, float xp, int ab, float ap, int bb, float bp, int cb, float cp, int db, float dp, string name, float score, int dir, color clr, bool is_forming) =>
+    line_style = is_forming ? line.style_dashed : line.style_solid
+
+    if i_show_lines
+        // رسم الخطوط الرئيسية
+        array.push(drawn_lines, line.new(xb, xp, ab, ap, color=clr, width=i_line_width, style=line_style))
+        array.push(drawn_lines, line.new(ab, ap, bb, bp, color=clr, width=i_line_width, style=line_style))
+        array.push(drawn_lines, line.new(bb, bp, cb, cp, color=clr, width=i_line_width, style=line_style))
+        array.push(drawn_lines, line.new(cb, cp, db, dp, color=clr, width=i_line_width, style=line_style))
+
+        // خطوط الربط
+        array.push(drawn_lines, line.new(xb, xp, bb, bp, color=color.new(clr, 60), width=1, style=line.style_dotted))
+        array.push(drawn_lines, line.new(ab, ap, cb, cp, color=color.new(clr, 60), width=1, style=line.style_dotted))
+
+    if i_show_labels
+        lbl_style_up = dir == 1 ? label.style_label_up : label.style_label_down
+        lbl_style_dn = dir == 1 ? label.style_label_down : label.style_label_up
+
+        array.push(drawn_labels, label.new(xb, xp, "X", color=color.new(clr, 80), textcolor=clr, style=lbl_style_up, size=size.small))
+        array.push(drawn_labels, label.new(ab, ap, "A", color=color.new(clr, 80), textcolor=clr, style=lbl_style_dn, size=size.small))
+        array.push(drawn_labels, label.new(bb, bp, "B", color=color.new(clr, 80), textcolor=clr, style=lbl_style_up, size=size.small))
+        array.push(drawn_labels, label.new(cb, cp, "C", color=color.new(clr, 80), textcolor=clr, style=lbl_style_dn, size=size.small))
+
+        status_txt = is_forming ? "FORMING" : "COMPLETE"
+        d_label_txt = "D\n" + name + "\n" + str.tostring(score, "#.#") + "%\n" + status_txt
+        array.push(drawn_labels, label.new(db, dp, d_label_txt, color=color.new(clr, 30), textcolor=color.white, style=lbl_style_up, size=size.normal))
+
+    // رسم PRZ
+    if i_show_prz
+        prz_range = math.abs(ap - xp) * i_prz_width / 100
+        prz_top = dp + prz_range
+        prz_bot = dp - prz_range
+        prz_clr = dir == 1 ? color.new(color.green, 85) : color.new(color.red, 85)
+        array.push(drawn_boxes, box.new(db, prz_top, db + i_prz_extend, prz_bot, bgcolor=prz_clr, border_color=clr, border_width=1))
+
+    // رسم مستويات الأهداف
+    if i_show_targets and not is_forming
+        xa_range = math.abs(ap - xp)
+        tp1 = dir == 1 ? dp + xa_range * F_382 : dp - xa_range * F_382
+        tp2 = dir == 1 ? dp + xa_range * F_618 : dp - xa_range * F_618
+        tp3 = dir == 1 ? dp + xa_range : dp - xa_range
+        sl = dir == 1 ? dp - xa_range * 0.2 : dp + xa_range * 0.2
+
+        // TP lines
+        array.push(drawn_lines, line.new(db, tp1, db + i_prz_extend, tp1, color=color.new(color.green, 50), width=1, style=line.style_dotted))
+        array.push(drawn_lines, line.new(db, tp2, db + i_prz_extend, tp2, color=color.new(color.green, 40), width=1, style=line.style_dotted))
+        array.push(drawn_lines, line.new(db, tp3, db + i_prz_extend, tp3, color=color.new(color.green, 30), width=1, style=line.style_dotted))
+
+        // SL line
+        array.push(drawn_lines, line.new(db, sl, db + i_prz_extend, sl, color=color.new(color.red, 50), width=1, style=line.style_dotted))
+
+        // Labels
+        array.push(drawn_labels, label.new(db + i_prz_extend, tp1, "TP1: " + str.tostring(tp1, format.mintick), color=color.new(color.green, 90), textcolor=color.green, style=label.style_label_left, size=size.tiny))
+        array.push(drawn_labels, label.new(db + i_prz_extend, tp2, "TP2: " + str.tostring(tp2, format.mintick), color=color.new(color.green, 90), textcolor=color.green, style=label.style_label_left, size=size.tiny))
+        array.push(drawn_labels, label.new(db + i_prz_extend, sl, "SL: " + str.tostring(sl, format.mintick), color=color.new(color.red, 90), textcolor=color.red, style=label.style_label_left, size=size.tiny))
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                          محرك كشف النماذج                                    ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var bool pattern_detected = false
+var string detected_pattern = ""
+var float detected_score = 0.0
+var int pattern_dir = 0
+
+if barstate.isconfirmed and array.size(zz_price) >= 5
+    pattern_detected := false
+
+    // الحصول على النقاط
+    sz = array.size(zz_price)
+
+    x_p = array.get(zz_price, sz - 5)
+    x_b = array.get(zz_bar, sz - 5)
+    x_d = array.get(zz_dir, sz - 5)
+
+    a_p = array.get(zz_price, sz - 4)
+    a_b = array.get(zz_bar, sz - 4)
+
+    b_p = array.get(zz_price, sz - 3)
+    b_b = array.get(zz_bar, sz - 3)
+
+    c_p = array.get(zz_price, sz - 2)
+    c_b = array.get(zz_bar, sz - 2)
+
+    d_p = array.get(zz_price, sz - 1)
+    d_b = array.get(zz_bar, sz - 1)
+    d_d = array.get(zz_dir, sz - 1)
+
+    // تحديد اتجاه النموذج
+    pat_dir = d_d == -1 ? 1 : -1
+
+    // البحث عن أفضل نموذج مطابق
+    best_pattern = ""
+    best_score = 0.0
+    best_valid = false
+
+    // Gartley
+    if i_gartley
+        [v, s, r1, r2, r3, r4] = f_validate_gartley(x_p, a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "Gartley"
+
+    // Bat
+    if i_bat
+        [v, s, r1, r2, r3, r4] = f_validate_bat(x_p, a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "Bat"
+
+    // Butterfly
+    if i_butterfly
+        [v, s, r1, r2, r3, r4] = f_validate_butterfly(x_p, a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "Butterfly"
+
+    // Crab
+    if i_crab
+        [v, s, r1, r2, r3, r4] = f_validate_crab(x_p, a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "Crab"
+
+    // Shark
+    if i_shark
+        [v, s, r1, r2, r3, r4] = f_validate_shark(x_p, a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "Shark"
+
+    // Cypher
+    if i_cypher
+        [v, s, r1, r2, r3, r4] = f_validate_cypher(x_p, a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "Cypher"
+
+    // ABCD
+    if i_abcd
+        [v, s, r1, r2, r3, r4] = f_validate_abcd(a_p, b_p, c_p, d_p, i_tolerance)
+        if v and s > best_score and s >= i_min_score
+            best_valid := true
+            best_score := s
+            best_pattern := "ABCD"
+
+    // رسم النموذج إذا وجد
+    if best_valid and bar_index - last_pattern_bar > 10
+        pattern_detected := true
+        detected_pattern := best_pattern
+        detected_score := best_score
+        pattern_dir := pat_dir
+        last_pattern_bar := bar_index
+        last_pattern_name := best_pattern
+        last_pattern_score := best_score
+
+        pat_color = pat_dir == 1 ? i_bull_color : i_bear_color
+        f_draw_pattern(x_b, x_p, a_b, a_p, b_b, b_p, c_b, c_p, d_b, d_p, best_pattern, best_score, pat_dir, pat_color, false)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                      كشف النماذج قيد التشكل (PRZ Prediction)                 ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var bool forming_pattern = false
+var string forming_name = ""
+var float forming_prz = 0.0
+
+if barstate.isconfirmed and i_show_forming and array.size(zz_price) >= 4 and not pattern_detected
+    forming_pattern := false
+
+    sz = array.size(zz_price)
+
+    // نقاط X, A, B, C
+    x_p = array.get(zz_price, sz - 4)
+    x_b = array.get(zz_bar, sz - 4)
+    x_d = array.get(zz_dir, sz - 4)
+
+    a_p = array.get(zz_price, sz - 3)
+    a_b = array.get(zz_bar, sz - 3)
+
+    b_p = array.get(zz_price, sz - 2)
+    b_b = array.get(zz_bar, sz - 2)
+
+    c_p = array.get(zz_price, sz - 1)
+    c_b = array.get(zz_bar, sz - 1)
+    c_d = array.get(zz_dir, sz - 1)
+
+    // التحقق من النسب الأولية
+    xb = f_retrace(x_p, a_p, b_p)
+    ac = f_retrace(a_p, b_p, c_p)
+
+    // تحديد اتجاه النموذج المحتمل
+    potential_dir = c_d == 1 ? 1 : -1  // إذا كانت C قمة، النموذج صعودي (D ستكون قاع)
+
+    // التنبؤ بمنطقة D لكل نموذج محتمل
+    prz_d = 0.0
+    prz_name = ""
+
+    // Gartley forming check
+    if i_gartley and f_is_ratio(xb, F_618, i_tolerance + 0.05) and f_in_range(ac, F_382, F_886, i_tolerance + 0.05)
+        [prz_ideal, prz_min, prz_max] = f_prz_gartley(x_p, a_p, potential_dir)
+        prz_d := prz_ideal
+        prz_name := "Gartley"
+        forming_pattern := true
+
+    // Bat forming check
+    if not forming_pattern and i_bat and f_in_range(xb, F_382, F_500, i_tolerance + 0.05) and f_in_range(ac, F_382, F_886, i_tolerance + 0.05)
+        [prz_ideal, prz_min, prz_max] = f_prz_bat(x_p, a_p, potential_dir)
+        prz_d := prz_ideal
+        prz_name := "Bat"
+        forming_pattern := true
+
+    // Butterfly forming check
+    if not forming_pattern and i_butterfly and f_is_ratio(xb, F_786, i_tolerance + 0.05)
+        [prz_ideal, prz_min, prz_max] = f_prz_butterfly(x_p, a_p, potential_dir)
+        prz_d := prz_ideal
+        prz_name := "Butterfly"
+        forming_pattern := true
+
+    // Crab forming check
+    if not forming_pattern and i_crab and f_in_range(xb, F_382, F_618, i_tolerance + 0.05)
+        [prz_ideal, prz_min, prz_max] = f_prz_crab(x_p, a_p, potential_dir)
+        prz_d := prz_ideal
+        prz_name := "Crab"
+        forming_pattern := true
+
+    // رسم النموذج قيد التشكل مع PRZ المتوقعة
+    if forming_pattern
+        forming_name := prz_name
+        forming_prz := prz_d
+
+        // رسم الخطوط الحالية
+        if i_show_lines
+            array.push(drawn_lines, line.new(x_b, x_p, a_b, a_p, color=i_forming_color, width=1, style=line.style_dashed))
+            array.push(drawn_lines, line.new(a_b, a_p, b_b, b_p, color=i_forming_color, width=1, style=line.style_dashed))
+            array.push(drawn_lines, line.new(b_b, b_p, c_b, c_p, color=i_forming_color, width=1, style=line.style_dashed))
+
+            // خط متوقع إلى D
+            array.push(drawn_lines, line.new(c_b, c_p, bar_index + 20, prz_d, color=color.new(i_forming_color, 50), width=1, style=line.style_dotted))
+
+        // رسم منطقة PRZ المتوقعة
+        if i_show_prz
+            prz_range = math.abs(a_p - x_p) * i_prz_width / 100
+            prz_clr = potential_dir == 1 ? color.new(color.lime, 85) : color.new(color.fuchsia, 85)
+            array.push(drawn_boxes, box.new(bar_index, prz_d + prz_range, bar_index + i_prz_extend, prz_d - prz_range, bgcolor=prz_clr, border_color=i_forming_color, border_width=1, border_style=line.style_dashed))
+
+        // تسمية PRZ المتوقعة
+        array.push(drawn_labels, label.new(bar_index + 10, prz_d, "PRZ: " + prz_name + "\n" + str.tostring(prz_d, format.mintick), color=color.new(i_forming_color, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                              لوحة المعلومات                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+var table dashboard = table.new(position.top_right, 2, 12, bgcolor=color.new(#1a1a2e, 90), border_width=1, border_color=color.new(color.purple, 50))
+
+if barstate.islast
+    // Header
+    table.cell(dashboard, 0, 0, "LEX-Q PRZ", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.purple, 40))
+    table.cell(dashboard, 1, 0, "PREDICTOR", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.purple, 40))
+
+    // ZigZag Info
+    table.cell(dashboard, 0, 1, "ZZ Points:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 1, str.tostring(array.size(zz_price)), text_color=color.aqua, text_size=size.tiny)
+
+    // Last Pattern
+    table.cell(dashboard, 0, 2, "Last Pattern:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 2, last_pattern_name != "" ? last_pattern_name : "None", text_color=color.lime, text_size=size.tiny)
+
+    // Last Score
+    table.cell(dashboard, 0, 3, "Score:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 3, last_pattern_score > 0 ? str.tostring(last_pattern_score, "#.#") + "%" : "-", text_color=color.yellow, text_size=size.tiny)
+
+    // Forming Pattern
+    table.cell(dashboard, 0, 4, "Forming:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 4, forming_pattern ? forming_name : "None", text_color=i_forming_color, text_size=size.tiny)
+
+    // PRZ Level
+    table.cell(dashboard, 0, 5, "PRZ Level:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 5, forming_pattern ? str.tostring(forming_prz, format.mintick) : "-", text_color=color.orange, text_size=size.tiny)
+
+    // Settings
+    table.cell(dashboard, 0, 6, "─────", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 6, "─────", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(dashboard, 0, 7, "Tolerance:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 7, str.tostring(i_tolerance * 100, "#.#") + "%", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(dashboard, 0, 8, "Min Score:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 8, str.tostring(i_min_score, "#.#") + "%", text_color=color.gray, text_size=size.tiny)
+
+    // Status
+    table.cell(dashboard, 0, 9, "─────", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 9, "─────", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(dashboard, 0, 10, "Alert:", text_color=color.gray, text_size=size.tiny)
+    alert_status = pattern_detected ? "NEW PATTERN!" : forming_pattern ? "WATCHING..." : "SCANNING"
+    alert_clr = pattern_detected ? color.lime : forming_pattern ? color.orange : color.gray
+    table.cell(dashboard, 1, 10, alert_status, text_color=alert_clr, text_size=size.tiny)
+
+    table.cell(dashboard, 0, 11, "Status:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dashboard, 1, 11, barstate.isconfirmed ? "CONFIRMED" : "PENDING", text_color=barstate.isconfirmed ? color.green : color.yellow, text_size=size.tiny)
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                             المخرجات البصرية                                 ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// إشارات التداول
+plotshape(pattern_detected and pattern_dir == 1, "Bullish Pattern", shape.labelup, location.belowbar, i_bull_color, size=size.normal, text="BUY", textcolor=color.white)
+plotshape(pattern_detected and pattern_dir == -1, "Bearish Pattern", shape.labeldown, location.abovebar, i_bear_color, size=size.normal, text="SELL", textcolor=color.white)
+
+// مؤشر النموذج قيد التشكل
+plotshape(forming_pattern, "Forming Pattern", shape.circle, location.bottom, i_forming_color, size=size.tiny)
+
+// خلفية التنبيه
+bgcolor(pattern_detected ? color.new(color.purple, 90) : na, title="Pattern Alert")
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                               التنبيهات                                      ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+alertcondition(pattern_detected and pattern_dir == 1, "Bullish Harmonic", "Bullish " + detected_pattern + " pattern detected! Score: " + str.tostring(detected_score, "#.#") + "%")
+alertcondition(pattern_detected and pattern_dir == -1, "Bearish Harmonic", "Bearish " + detected_pattern + " pattern detected! Score: " + str.tostring(detected_score, "#.#") + "%")
+alertcondition(forming_pattern, "Pattern Forming", "Potential " + forming_name + " pattern forming. Watch PRZ at " + str.tostring(forming_prz, format.mintick))
+alertcondition(pattern_detected, "Any Pattern", "Harmonic pattern detected: " + detected_pattern)
